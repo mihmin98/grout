@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"grout/cfw"
+	"grout/hashing"
 	"grout/romm"
 	"grout/settings"
 )
@@ -32,6 +33,20 @@ func testZip(t *testing.T, entries map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// zipHash is the server's hash of a zip payload.
+func zipHash(t *testing.T, data []byte) string {
+	t.Helper()
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := hashing.ComputeZipReaderHash(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 func writeTestFile(t *testing.T, path, content string) {
@@ -63,6 +78,20 @@ func downloadItem(dir, romFileName, serverName, serverExt string) SyncItem {
 		RemoteSave: &romm.Save{ID: 9, FileName: serverName, FileExtension: serverExt},
 		Action:     ActionDownload,
 	}
+}
+
+// withLocalClockSave makes item's local save dir/Crystal.srm with a Crystal.rtc
+// companion, both written to disk.
+func withLocalClockSave(t *testing.T, item SyncItem, dir, sram, clock string) SyncItem {
+	t.Helper()
+	srm := filepath.Join(dir, "Crystal.srm")
+	rtc := filepath.Join(dir, "Crystal.rtc")
+	writeTestFile(t, srm, sram)
+	writeTestFile(t, rtc, clock)
+	item.LocalSave.FileName = "Crystal.srm"
+	item.LocalSave.FilePath = srm
+	item.LocalSave.Companions = []string{rtc}
+	return item
 }
 
 func TestIsZipPayload(t *testing.T) {
@@ -98,46 +127,26 @@ func TestIsZipPayload(t *testing.T) {
 
 // W14: a save stored on the server as Game.zip for a ROM Game.zip, with no local
 // save, would be written over the ROM (saves sit beside ROMs on ROCKNIX).
-func TestFileDownloadTarget_RefusesNonSaveName(t *testing.T) {
+func TestPlanFileDownload_RefusesNonSaveName(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
 	dir := t.TempDir()
 	rom := filepath.Join(dir, "Game.zip")
 	writeTestFile(t, rom, "rom bytes")
 
 	item := downloadItem(dir, "Game.zip", "Game.zip", "zip")
-	target, err := fileDownloadTarget(item, []byte("raw save bytes"), &settings.Config{})
+	p, err := planFileDownload(item, []byte("raw save bytes"), &settings.Config{}, true)
 	if !errors.Is(err, errNonSaveName) {
-		t.Fatalf("err = %v, want errNonSaveName (target %q)", err, target)
+		t.Fatalf("err = %v, want errNonSaveName (target %q)", err, p.primary)
 	}
-	if target != rom {
-		t.Errorf("target = %q, want %q reported for the log", target, rom)
+	if p.primary != rom {
+		t.Errorf("primary = %q, want %q reported for the log", p.primary, rom)
 	}
 	if got := readTestFile(t, rom); got != "rom bytes" {
 		t.Errorf("ROM changed: %q", got)
 	}
 }
 
-// W2: a zip payload must never be written into a single-file save.
-func TestFileDownloadTarget_RefusesZipPayload(t *testing.T) {
-	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
-	dir := t.TempDir()
-	local := filepath.Join(dir, "Crystal.srm")
-	writeTestFile(t, local, "local sram")
-
-	item := downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip")
-	item.LocalSave.FileName = "Crystal.srm"
-	item.LocalSave.FilePath = local
-
-	payload := testZip(t, map[string]string{"Crystal.srm": "sram", "Crystal.rtc": "clock"})
-	if _, err := fileDownloadTarget(item, payload, &settings.Config{}); !errors.Is(err, errZipSaveUnsupported) {
-		t.Fatalf("err = %v, want errZipSaveUnsupported", err)
-	}
-	if got := readTestFile(t, local); got != "local sram" {
-		t.Errorf("local save changed: %q", got)
-	}
-}
-
-func TestFileDownloadTarget_LocalPathWins(t *testing.T) {
+func TestPlanFileDownload_LocalPathWins(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
 	dir := t.TempDir()
 	local := filepath.Join(dir, "Crystal.srm")
@@ -148,35 +157,251 @@ func TestFileDownloadTarget_LocalPathWins(t *testing.T) {
 	item.LocalSave.FileName = "Crystal.srm"
 	item.LocalSave.FilePath = local
 
-	target, err := fileDownloadTarget(item, []byte("raw"), &settings.Config{})
+	p, err := planFileDownload(item, []byte("raw"), &settings.Config{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != local {
-		t.Errorf("target = %q, want %q", target, local)
+	if p.primary != local {
+		t.Errorf("primary = %q, want %q", p.primary, local)
 	}
 }
 
-func TestFileDownloadTarget_DerivedName(t *testing.T) {
+func TestPlanFileDownload_DerivedName(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "Crystal.7z"), "rom bytes")
 
 	item := downloadItem(dir, "Crystal.7z", "Crystal [2026-01-01_00-00-00].srm", "srm")
-	target, err := fileDownloadTarget(item, []byte("raw"), &settings.Config{})
+	p, err := planFileDownload(item, []byte("raw"), &settings.Config{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(dir, "Crystal.srm"); target != want {
-		t.Errorf("target = %q, want %q", target, want)
+	if want := filepath.Join(dir, "Crystal.srm"); p.primary != want {
+		t.Errorf("primary = %q, want %q", p.primary, want)
 	}
 }
 
-func TestFileDownloadTarget_NoSaveFolder(t *testing.T) {
+func TestPlanFileDownload_NoSaveFolder(t *testing.T) {
 	t.Setenv(cfw.EnvVar, "")
 	item := downloadItem("", "Crystal.7z", "Crystal.srm", "srm")
-	if _, err := fileDownloadTarget(item, []byte("raw"), nil); !errors.Is(err, errNoSavePath) {
+	if _, err := planFileDownload(item, []byte("raw"), nil, true); !errors.Is(err, errNoSavePath) {
 		t.Fatalf("err = %v, want errNoSavePath", err)
+	}
+}
+
+// W1: Argosy's zip for a ROM with no local save becomes Crystal.srm + Crystal.rtc,
+// never Crystal.zip, and the record gets the server's hash of the zip.
+func TestPlanFileDownload_ArgosyZipNoLocalSave(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "Crystal.7z"), "rom bytes")
+
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "R1"})
+	item := downloadItem(dir, "Crystal.7z", "Crystal [2026-01-01_00-00-00].zip", "zip")
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "Crystal.srm"); p.primary != want {
+		t.Errorf("primary = %q, want %q", p.primary, want)
+	}
+	if want := filepath.Join(dir, "Crystal.rtc"); p.clock != want {
+		t.Errorf("clock = %q, want %q", p.clock, want)
+	}
+	if string(p.ram) != "S1" || string(p.clockData) != "R1" {
+		t.Errorf("ram %q, clock %q", p.ram, p.clockData)
+	}
+	if p.content != zipHash(t, payload) {
+		t.Errorf("content = %s, want the zip's hash", p.content)
+	}
+}
+
+// W2: Argosy's zip onto an existing .srm + .rtc replaces both.
+func TestPlanFileDownload_ArgosyZipOntoLocalSave(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	item := withLocalClockSave(t, downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip"), dir, "S0", "R0")
+
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "R1"})
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.primary != item.LocalSave.FilePath || p.clock != item.LocalSave.Companions[0] {
+		t.Errorf("primary %q, clock %q, want the local .srm and .rtc", p.primary, p.clock)
+	}
+	if p.keptLocalClock {
+		t.Error("same-size clock should be replaced, not kept")
+	}
+}
+
+// The clock is written into the local save's own .rtc, whatever its case.
+func TestPlanFileDownload_ClockIntoLocalCompanion(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	item := withLocalClockSave(t, downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip"), dir, "S0", "R0")
+	upper := filepath.Join(dir, "Crystal.RTC")
+	if err := os.Rename(item.LocalSave.Companions[0], upper); err != nil {
+		t.Fatal(err)
+	}
+	item.LocalSave.Companions = []string{upper}
+
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "R1"})
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.clock != upper {
+		t.Errorf("clock = %q, want %q", p.clock, upper)
+	}
+}
+
+// A local .rtc of a different size is another clock format: keep it.
+func TestPlanFileDownload_ClockSizeGuard(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	local32 := strings.Repeat("c", 32)
+	item := withLocalClockSave(t, downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip"), dir, "S0", local32)
+
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "8-bytes!"})
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.keptLocalClock || p.clock != "" {
+		t.Errorf("kept %v, clock %q, want the local clock kept", p.keptLocalClock, p.clock)
+	}
+	if string(p.ram) != "S1" || p.content != zipHash(t, payload) {
+		t.Errorf("ram %q, content %s: the save data must still be written", p.ram, p.content)
+	}
+}
+
+// Off ROCKNIX the clock entry is ignored and no .rtc is created.
+func TestPlanFileDownload_NoClockPairing(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.Knulli))
+	dir := t.TempDir()
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "R1"})
+	item := downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip")
+	p, err := planFileDownload(item, payload, &settings.Config{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.clock != "" || p.clockData != nil {
+		t.Errorf("clock %q planned without clock pairing", p.clock)
+	}
+	if want := filepath.Join(dir, "Crystal.srm"); p.primary != want || string(p.ram) != "S1" {
+		t.Errorf("primary %q ram %q", p.primary, p.ram)
+	}
+}
+
+// W9: Sigil's neutral zip: save.sram becomes the .srm; its clock.rtc is ignored.
+func TestPlanFileDownload_SigilNeutralZip(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	payload := testZip(t, map[string]string{"save.sram": "S1", "clock.rtc": strings.Repeat("n", 48)})
+	item := downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip")
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "Crystal.srm"); p.primary != want {
+		t.Errorf("primary = %q, want %q", p.primary, want)
+	}
+	if p.clock != "" {
+		t.Errorf("clock = %q, want none", p.clock)
+	}
+}
+
+// W7: a raw .srm onto a .srm + .rtc save leaves the .rtc alone.
+func TestPlanFileDownload_RawOntoClockSave(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	item := withLocalClockSave(t, downloadItem(dir, "Crystal.7z", "Crystal.srm", "srm"), dir, "S0", "R0")
+
+	p, err := planFileDownload(item, []byte("S1"), &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.primary != item.LocalSave.FilePath || p.clock != "" {
+		t.Errorf("primary %q clock %q, want the .srm only", p.primary, p.clock)
+	}
+	if p.content != hashing.ComputeBytesMD5([]byte("S1")) {
+		t.Errorf("content = %s, want the payload's MD5", p.content)
+	}
+}
+
+// W8: a zip with no usable save data writes nothing.
+func TestPlanFileDownload_InvalidZipShapes(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	shapes := map[string]map[string]string{
+		"no save data":       {"Crystal.rtc": "R1", "readme.txt": "x"},
+		"two save-data":      {"Crystal.srm": "S1", "Crystal.sav": "S2"},
+		"two clocks":         {"Crystal.srm": "S1", "Crystal.rtc": "R1", "Other.rtc": "R2"},
+		"only unknown files": {"notes.txt": "x"},
+	}
+	for name, entries := range shapes {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			item := withLocalClockSave(t, downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip"), dir, "S0", "R0")
+			if _, err := planFileDownload(item, testZip(t, entries), &settings.Config{}, true); !errors.Is(err, errZipSaveShape) {
+				t.Errorf("err = %v, want errZipSaveShape", err)
+			}
+			if readTestFile(t, item.LocalSave.FilePath) != "S0" || readTestFile(t, item.LocalSave.Companions[0]) != "R0" {
+				t.Error("local save changed")
+			}
+		})
+	}
+}
+
+// Writing a plan puts the bytes in place, and what the download records makes
+// the next sync see no change.
+func TestWritePlacement_ArgosyZipRoundTrip(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	payload := testZip(t, map[string]string{"Crystal.srm": "S1", "Crystal.rtc": "R1"})
+	item := downloadItem(dir, "Crystal.7z", "Crystal.zip", "zip")
+	p, err := planFileDownload(item, payload, &settings.Config{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePlacement(p); err != nil {
+		t.Fatal(err)
+	}
+	if readTestFile(t, p.primary) != "S1" || readTestFile(t, p.clock) != "R1" {
+		t.Fatal("written bytes differ from the zip entries")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Crystal.zip")); !os.IsNotExist(err) {
+		t.Error("a Crystal.zip was written")
+	}
+
+	// What download records, and the save as the next scan sees it.
+	identity, err := hashing.ComputeMD5(p.primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := recordedHash{Content: p.content, Identity: identity}
+	scanned := LocalSave{RomID: 1, FileName: "Crystal.srm", FilePath: p.primary, Companions: []string{p.clock}}
+	if got := mustReportedHash(t, scanned, rec); got != p.content {
+		t.Errorf("next sync reports %s, want the recorded %s", got, p.content)
+	}
+	// Grout's own hash of the files equals the server's: even without the record.
+	if got := mustReportedHash(t, scanned, recordedHash{}); got != p.content {
+		t.Errorf("composite of the written files %s != zip hash %s", got, p.content)
+	}
+}
+
+func TestWritePlacement_RawLeavesClockAlone(t *testing.T) {
+	dir := t.TempDir()
+	srm := filepath.Join(dir, "Crystal.srm")
+	rtc := filepath.Join(dir, "Crystal.rtc")
+	writeTestFile(t, srm, "S0")
+	writeTestFile(t, rtc, "R0")
+
+	if err := writePlacement(downloadPlacement{primary: srm, ram: []byte("S1")}); err != nil {
+		t.Fatal(err)
+	}
+	if readTestFile(t, srm) != "S1" || readTestFile(t, rtc) != "R0" {
+		t.Errorf("srm %q rtc %q, want S1 and the untouched R0", readTestFile(t, srm), readTestFile(t, rtc))
 	}
 }
 
@@ -189,15 +414,15 @@ func TestBackupFile_UnmatchedFileAtTarget(t *testing.T) {
 	writeTestFile(t, existing, "unmatched progress")
 
 	item := downloadItem(dir, "Game.gbc", "Game.srm", "srm")
-	target, err := fileDownloadTarget(item, []byte("server sram"), &settings.Config{})
+	p, err := planFileDownload(item, []byte("server sram"), &settings.Config{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != existing {
-		t.Fatalf("target = %q, want %q", target, existing)
+	if p.primary != existing {
+		t.Fatalf("primary = %q, want %q", p.primary, existing)
 	}
 
-	if err := backupFile(target, &settings.Config{}); err != nil {
+	if err := backupFile(p.primary, &settings.Config{}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(filepath.Join(dir, ".backup"))

@@ -2,6 +2,7 @@ package saves
 
 import (
 	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
 	"grout/cache"
@@ -1485,7 +1486,7 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 		return false
 	}
 
-	var savePath string
+	var savePath, contentHash string
 	if item.LocalSave.IsDirectorySave {
 		if err := backupDirectorySave(item.LocalSave, config); err != nil {
 			logger.Error("Failed to backup save before download, aborting download", "path", item.LocalSave.FilePath, "error", err)
@@ -1493,29 +1494,13 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 		}
 		savePath = item.LocalSave.FilePath
 		if savePath == "" {
-			savePath = derivedSavePath(*item, config)
+			savePath = derivedSavePath(*item, config, item.RemoteSave.FileExtension)
 		}
 		if savePath == "" {
 			logger.Error("Could not determine save path", "romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug)
 			return false
 		}
-	} else {
-		target, err := fileDownloadTarget(*item, data, config)
-		if err != nil {
-			logger.Error("Not writing downloaded save",
-				"romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug, "path", target,
-				"serverFile", item.RemoteSave.FileName, "serverExt", item.RemoteSave.FileExtension, "error", err)
-			return false
-		}
-		// Back up whatever sits at the target, whether or not the scan matched it.
-		if err := backupFile(target, config); err != nil {
-			logger.Error("Failed to backup save before download, aborting download", "path", target, "error", err)
-			return false
-		}
-		savePath = target
-	}
 
-	if item.LocalSave.IsDirectorySave {
 		// Write zip to temp, then extract to the save directory
 		tmpZip, err := os.CreateTemp("", "grout-save-dl-*.zip")
 		if err != nil {
@@ -1561,17 +1546,34 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 			return false
 		}
 	} else {
-		if err := os.MkdirAll(filepath.Dir(savePath), 0755); err != nil {
-			logger.Error("Failed to create save directory", "path", filepath.Dir(savePath), "error", err)
+		placement, err := planFileDownload(*item, data, config, cfw.ActiveFirmware().PairsClockFiles())
+		if err != nil {
+			fields := []any{"romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug, "path", placement.primary,
+				"serverFile", item.RemoteSave.FileName, "serverExt", item.RemoteSave.FileExtension, "error", err}
+			if isZipPayload(data) {
+				if r, zerr := zip.NewReader(bytes.NewReader(data), int64(len(data))); zerr == nil {
+					fields = append(fields, "entries", zipEntryNames(r))
+				}
+			}
+			logger.Error("Not writing downloaded save", fields...)
 			return false
 		}
-
-		// Write atomically (temp file in the same dir + rename) so a power loss or I/O
-		// error mid-write can't leave a truncated, corrupt save in place.
-		if err := files.WriteFileAtomic(savePath, data, 0644); err != nil {
-			logger.Error("Failed to write save file", "path", savePath, "error", err)
+		// Back up whatever sits at the targets, whether or not the scan matched it.
+		for _, p := range []string{placement.primary, placement.clock} {
+			if p == "" {
+				continue
+			}
+			if err := backupFile(p, config); err != nil {
+				logger.Error("Failed to backup save before download, aborting download", "path", p, "error", err)
+				return false
+			}
+		}
+		if err := writePlacement(placement); err != nil {
+			logger.Error("Failed to write save file", "path", placement.primary, "clock", placement.clock, "error", err)
 			return false
 		}
+		savePath = placement.primary
+		contentHash = placement.content
 	}
 
 	t := item.RemoteSave.UpdatedAt.Truncate(time.Second)
@@ -1595,13 +1597,19 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 		recordSlot = *item.RemoteSave.Slot
 	}
 	recordFileName := recordedDownloadFileName(*item, savePath)
-	// The written file alone: its hash is both the content and the identity.
-	hash, identity, _ := saveHashes(LocalSave{
-		FilePath:        savePath,
-		IsDirectorySave: item.LocalSave.IsDirectorySave,
-		RelatedDirs:     item.LocalSave.RelatedDirs,
-	})
-	recordSaveState(deviceID, item.LocalSave.RomID, recordFileName, recordSlot, item.RemoteSave.ID, hash, identity)
+	// A file save records the server's hash of the payload, so the next sync is a
+	// no-op even when a local clock file was kept; its identity is the written save.
+	var identity string
+	if item.LocalSave.IsDirectorySave {
+		contentHash, identity, _ = saveHashes(LocalSave{
+			FilePath:        savePath,
+			IsDirectorySave: true,
+			RelatedDirs:     item.LocalSave.RelatedDirs,
+		})
+	} else {
+		identity, _ = hashing.ComputeMD5(savePath)
+	}
+	recordSaveState(deviceID, item.LocalSave.RomID, recordFileName, recordSlot, item.RemoteSave.ID, contentHash, identity)
 
 	logger.Debug("Download successful", "romID", item.LocalSave.RomID, "romName", item.LocalSave.RomName, "path", savePath, "recordedSlot", recordSlot)
 	return true
@@ -1611,9 +1619,9 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 var errNoSavePath = errors.New("could not determine save path")
 
 // derivedSavePath is where a download goes for a ROM with no local save: the
-// platform's save folder and a name derived from the ROM, or "" when the save
-// folder is unknown.
-func derivedSavePath(item SyncItem, config *settings.Config) string {
+// platform's save folder and a name derived from the ROM with extension ext, or
+// "" when the save folder is unknown.
+func derivedSavePath(item SyncItem, config *settings.Config, ext string) string {
 	saveDir := item.LocalSave.EmulatorDir
 	if saveDir == "" {
 		saveDir = ResolveSaveDirectory(item.LocalSave.FSSlug, config)
@@ -1621,30 +1629,125 @@ func derivedSavePath(item SyncItem, config *settings.Config) string {
 	if saveDir == "" {
 		return ""
 	}
-	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, item.RemoteSave.FileExtension, saveDir)
+	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, ext, saveDir)
 	return filepath.Join(saveDir, fileName)
 }
 
-// fileDownloadTarget returns the path a downloaded file save is written to, or
-// why it must not be written. The local save's path wins; a path derived for a
-// ROM with no local save must carry a save extension. On error the path, when
-// known, is still returned for logging.
-func fileDownloadTarget(item SyncItem, data []byte, config *settings.Config) (string, error) {
-	path := item.LocalSave.FilePath
-	derived := path == ""
-	if derived {
-		path = derivedSavePath(item, config)
+// downloadPrimaryPath is the save file a download is written to: the local
+// save's path, else one derived for the ROM with extension ext, which must be a
+// save extension. On error the path, when known, is still returned for logging.
+func downloadPrimaryPath(item SyncItem, config *settings.Config, ext string) (string, error) {
+	if item.LocalSave.FilePath != "" {
+		return item.LocalSave.FilePath, nil
 	}
-	if isZipPayload(data) {
-		return path, errZipSaveUnsupported
-	}
+	path := derivedSavePath(item, config, ext)
 	if path == "" {
 		return "", errNoSavePath
 	}
-	if derived && !hasSaveExtension(path) {
+	if !hasSaveExtension(path) {
 		return path, errNonSaveName
 	}
 	return path, nil
+}
+
+// downloadPlacement is where a downloaded file save's pieces go.
+type downloadPlacement struct {
+	primary        string // save file to write
+	ram            []byte
+	clock          string // .rtc to write; "" when none
+	clockData      []byte
+	keptLocalClock bool   // clock size guard kept the local .rtc
+	content        string // the server's hash of the payload, recorded after writing
+}
+
+// planFileDownload works out what a downloaded file save writes where, touching
+// nothing. A raw payload replaces the save file and leaves any local clock file
+// alone. A zip (Argosy's .srm + .rtc bundle) is unpacked by entry role: the
+// save-data entry becomes the save file and, with pairClocks, the clock entry
+// becomes <stem>.rtc, unless a local .rtc of a different size (another clock
+// format) is there, which is kept. On error primary is set when known, for logs.
+func planFileDownload(item SyncItem, data []byte, config *settings.Config, pairClocks bool) (downloadPlacement, error) {
+	logger := gaba.GetLogger()
+
+	if !isZipPayload(data) {
+		primary, err := downloadPrimaryPath(item, config, item.RemoteSave.FileExtension)
+		if err != nil {
+			return downloadPlacement{primary: primary}, err
+		}
+		return downloadPlacement{primary: primary, ram: data, content: hashing.ComputeBytesMD5(data)}, nil
+	}
+
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return downloadPlacement{}, err
+	}
+	ramEntry, clockEntry, ignored, err := classifyZipEntries(r)
+	if err != nil {
+		return downloadPlacement{}, err
+	}
+	if len(ignored) > 0 {
+		logger.Debug("Ignoring zip save entries", "entries", ignored)
+	}
+
+	p := downloadPlacement{}
+	if p.primary, err = downloadPrimaryPath(item, config, zipRAMExt(ramEntry)); err != nil {
+		return p, err
+	}
+	if p.ram, err = readZipEntry(ramEntry); err != nil {
+		return p, err
+	}
+	if p.content, err = hashing.ComputeZipReaderHash(r); err != nil {
+		return p, err
+	}
+	if clockEntry == nil {
+		return p, nil
+	}
+	if !pairClocks {
+		logger.Info("Ignoring the clock file in a zip save on this firmware", "entry", clockEntry.Name, "path", p.primary)
+		return p, nil
+	}
+
+	clockData, err := readZipEntry(clockEntry)
+	if err != nil {
+		return p, err
+	}
+	clock := localClockPath(item.LocalSave, p.primary)
+	if info, err := os.Stat(clock); err == nil && info.Size() != int64(len(clockData)) {
+		logger.Warn("Keeping the local clock file: the downloaded one has a different size (another clock format)",
+			"path", clock, "localSize", info.Size(), "downloadedSize", len(clockData))
+		p.keptLocalClock = true
+		return p, nil
+	}
+	p.clock, p.clockData = clock, clockData
+	return p, nil
+}
+
+// localClockPath is the .rtc that goes with the save file at primary: the local
+// save's own clock companion when there is one, else <primary stem>.rtc.
+func localClockPath(ls LocalSave, primary string) string {
+	if ls.FilePath == primary {
+		for _, c := range ls.Companions {
+			if strings.EqualFold(filepath.Ext(c), ".rtc") {
+				return c
+			}
+		}
+	}
+	return strings.TrimSuffix(primary, filepath.Ext(primary)) + ".rtc"
+}
+
+// writePlacement writes a planned file download, each file atomically (temp file
+// + rename) so a power loss can't leave a truncated save. The clock goes first
+// and the save data last, so a failure leaves the old progress in place.
+func writePlacement(p downloadPlacement) error {
+	if err := os.MkdirAll(filepath.Dir(p.primary), 0755); err != nil {
+		return err
+	}
+	if p.clock != "" {
+		if err := files.WriteFileAtomic(p.clock, p.clockData, 0644); err != nil {
+			return err
+		}
+	}
+	return files.WriteFileAtomic(p.primary, p.ram, 0644)
 }
 
 // backupFile copies the file at path into <dir>/.backup as "<base> [<mtime>]<ext>"
