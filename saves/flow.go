@@ -1301,6 +1301,17 @@ func resolveUploadConflict(client *romm.Client, deviceID string, item *SyncItem,
 	}
 }
 
+// uploadRecordHash picks the content hash to record after an upload: the
+// server's when it sent one, else the locally computed one. mismatch reports a
+// server hash that differs from a known local one, which the next negotiate would
+// otherwise only show as a spurious upload.
+func uploadRecordHash(server *string, local string) (hash string, mismatch bool) {
+	if server == nil || *server == "" {
+		return local, false
+	}
+	return *server, local != "" && local != *server
+}
+
 func upload(client *romm.Client, deviceID string, item *SyncItem) uploadOutcome {
 	logger := gaba.GetLogger()
 	logger.Debug("Uploading save", "romID", item.LocalSave.RomID, "romName", item.LocalSave.RomName, "file", item.LocalSave.FilePath)
@@ -1341,8 +1352,17 @@ func upload(client *romm.Client, deviceID string, item *SyncItem) uploadOutcome 
 	// No MarkDeviceSynced: the server upserts last_synced_at automatically on
 	// upload because device_id is supplied.
 
-	// Record the synced state so the next scan reports this save under the same slot.
-	hash, _ := saveContentHash(item.LocalSave)
+	// Record the synced state so the next scan reports this save under the same slot,
+	// with the hash the server computed for it.
+	localHash, _ := saveContentHash(item.LocalSave)
+	hash, mismatch := uploadRecordHash(uploadedSave.ContentHash, localHash)
+	if mismatch {
+		logger.Warn("Server hash differs from local hash after upload",
+			"romID", item.LocalSave.RomID, "file", item.LocalSave.FileName, "server", hash, "local", localHash)
+	} else if uploadedSave.ContentHash == nil || *uploadedSave.ContentHash == "" {
+		logger.Debug("Server sent no content hash after upload; recording the local hash",
+			"romID", item.LocalSave.RomID, "file", item.LocalSave.FileName)
+	}
 	recordSaveState(deviceID, item.LocalSave.RomID, item.LocalSave.FileName, query.Slot, uploadedSave.ID, hash)
 
 	logger.Debug("Upload successful", "romID", item.LocalSave.RomID)
