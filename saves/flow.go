@@ -1363,69 +1363,41 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 		item.LocalSave.IsDirectorySave = true
 	}
 
-	if item.LocalSave.FilePath != "" {
-		if info, err := os.Stat(item.LocalSave.FilePath); err == nil {
-			backupDir := filepath.Join(filepath.Dir(item.LocalSave.FilePath), ".backup")
-			ext := filepath.Ext(item.LocalSave.FileName)
-			base := strings.TrimSuffix(item.LocalSave.FileName, ext)
-			timestamp := info.ModTime().Format("2006-01-02 15-04-05")
-			backupPath := filepath.Join(backupDir, fmt.Sprintf("%s [%s]%s", base, timestamp, ext))
-
-			if err := os.MkdirAll(backupDir, 0755); err != nil {
-				logger.Error("Failed to create backup directory, aborting download", "path", backupDir, "error", err)
-				return false
-			}
-
-			var backupErr error
-			if item.LocalSave.IsDirectorySave {
-				// Zip all related directories into the backup path
-				dirs := item.LocalSave.RelatedDirs
-				if len(dirs) == 0 {
-					dirs = []string{item.LocalSave.FilePath}
-				}
-				zipPath, zipErr := ZipDirectories(dirs)
-				if zipErr != nil {
-					backupErr = zipErr
-				} else {
-					defer os.Remove(zipPath)
-					backupErr = files.CopyFile(zipPath, backupPath)
-				}
-			} else {
-				backupErr = files.CopyFile(item.LocalSave.FilePath, backupPath)
-			}
-
-			if backupErr != nil {
-				logger.Error("Failed to backup save before download, aborting download", "path", item.LocalSave.FilePath, "error", backupErr)
-				return false
-			}
-
-			logger.Debug("Backed up save before download", "backup", backupPath)
-			if config != nil && config.SaveBackupLimit > 0 {
-				cleanupBackups(backupDir, base, config.SaveBackupLimit)
-			}
-		}
-	}
-
+	// Fetch before touching anything on disk, so a failed fetch changes nothing.
 	data, err := client.DownloadSaveByID(item.RemoteSave.ID, deviceID, false)
 	if err != nil {
 		logger.Error("Failed to download save", "romID", item.LocalSave.RomID, "saveID", item.RemoteSave.ID, "error", err)
 		return false
 	}
 
-	savePath := item.LocalSave.FilePath
-	if savePath == "" {
-		saveDir := item.LocalSave.EmulatorDir
-		if saveDir == "" {
-			saveDir = ResolveSaveDirectory(item.LocalSave.FSSlug, config)
+	var savePath string
+	if item.LocalSave.IsDirectorySave {
+		if err := backupDirectorySave(item.LocalSave, config); err != nil {
+			logger.Error("Failed to backup save before download, aborting download", "path", item.LocalSave.FilePath, "error", err)
+			return false
 		}
-		if saveDir != "" {
-			fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, item.RemoteSave.FileExtension, saveDir)
-			savePath = filepath.Join(saveDir, fileName)
+		savePath = item.LocalSave.FilePath
+		if savePath == "" {
+			savePath = derivedSavePath(*item, config)
 		}
-	}
-	if savePath == "" {
-		logger.Error("Could not determine save path", "romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug)
-		return false
+		if savePath == "" {
+			logger.Error("Could not determine save path", "romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug)
+			return false
+		}
+	} else {
+		target, err := fileDownloadTarget(*item, data, config)
+		if err != nil {
+			logger.Error("Not writing downloaded save",
+				"romID", item.LocalSave.RomID, "fsSlug", item.LocalSave.FSSlug, "path", target,
+				"serverFile", item.RemoteSave.FileName, "serverExt", item.RemoteSave.FileExtension, "error", err)
+			return false
+		}
+		// Back up whatever sits at the target, whether or not the scan matched it.
+		if err := backupFile(target, config); err != nil {
+			logger.Error("Failed to backup save before download, aborting download", "path", target, "error", err)
+			return false
+		}
+		savePath = target
 	}
 
 	if item.LocalSave.IsDirectorySave {
@@ -1517,6 +1489,122 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 
 	logger.Debug("Download successful", "romID", item.LocalSave.RomID, "romName", item.LocalSave.RomName, "path", savePath, "recordedSlot", recordSlot)
 	return true
+}
+
+// errNoSavePath: neither a local save nor the ROM tells where a download goes.
+var errNoSavePath = errors.New("could not determine save path")
+
+// derivedSavePath is where a download goes for a ROM with no local save: the
+// platform's save folder and a name derived from the ROM, or "" when the save
+// folder is unknown.
+func derivedSavePath(item SyncItem, config *settings.Config) string {
+	saveDir := item.LocalSave.EmulatorDir
+	if saveDir == "" {
+		saveDir = ResolveSaveDirectory(item.LocalSave.FSSlug, config)
+	}
+	if saveDir == "" {
+		return ""
+	}
+	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, item.RemoteSave.FileExtension, saveDir)
+	return filepath.Join(saveDir, fileName)
+}
+
+// fileDownloadTarget returns the path a downloaded file save is written to, or
+// why it must not be written. The local save's path wins; a path derived for a
+// ROM with no local save must carry a save extension. On error the path, when
+// known, is still returned for logging.
+func fileDownloadTarget(item SyncItem, data []byte, config *settings.Config) (string, error) {
+	path := item.LocalSave.FilePath
+	derived := path == ""
+	if derived {
+		path = derivedSavePath(item, config)
+	}
+	if isZipPayload(data) {
+		return path, errZipSaveUnsupported
+	}
+	if path == "" {
+		return "", errNoSavePath
+	}
+	if derived && !hasSaveExtension(path) {
+		return path, errNonSaveName
+	}
+	return path, nil
+}
+
+// backupFile copies the file at path into <dir>/.backup as "<base> [<mtime>]<ext>"
+// before it is overwritten, then prunes old backups. A missing file needs none.
+func backupFile(path string, config *settings.Config) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+
+	backupDir := filepath.Join(filepath.Dir(path), ".backup")
+	name := filepath.Base(path)
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	timestamp := info.ModTime().Format("2006-01-02 15-04-05")
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s [%s]%s", base, timestamp, ext))
+
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+	if err := files.CopyFile(path, backupPath); err != nil {
+		return err
+	}
+
+	gaba.GetLogger().Debug("Backed up save before download", "backup", backupPath)
+	if config != nil && config.SaveBackupLimit > 0 {
+		cleanupBackups(backupDir, base, config.SaveBackupLimit)
+	}
+	return nil
+}
+
+// backupDirectorySave zips a directory (PSP) save's folders into
+// <dir>/.backup as "<base> [<mtime>]<ext>" before a download replaces them.
+func backupDirectorySave(ls LocalSave, config *settings.Config) error {
+	if ls.FilePath == "" {
+		return nil
+	}
+	info, err := os.Stat(ls.FilePath)
+	if err != nil {
+		return nil
+	}
+
+	backupDir := filepath.Join(filepath.Dir(ls.FilePath), ".backup")
+	ext := filepath.Ext(ls.FileName)
+	base := strings.TrimSuffix(ls.FileName, ext)
+	timestamp := info.ModTime().Format("2006-01-02 15-04-05")
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s [%s]%s", base, timestamp, ext))
+
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+
+	dirs := ls.RelatedDirs
+	if len(dirs) == 0 {
+		dirs = []string{ls.FilePath}
+	}
+	zipPath, err := ZipDirectories(dirs)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(zipPath)
+	if err := files.CopyFile(zipPath, backupPath); err != nil {
+		return err
+	}
+
+	gaba.GetLogger().Debug("Backed up save before download", "backup", backupPath)
+	if config != nil && config.SaveBackupLimit > 0 {
+		cleanupBackups(backupDir, base, config.SaveBackupLimit)
+	}
+	return nil
 }
 
 func cleanupBackups(backupDir string, baseName string, limit int) {
