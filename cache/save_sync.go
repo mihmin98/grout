@@ -44,7 +44,10 @@ type SaveSyncState struct {
 	Slot        string
 	SaveID      int
 	ContentHash string
-	SyncedAt    time.Time
+	// IdentityHash is the save's hash ignoring companion clock files, so a
+	// clock-only change can be told apart from new progress.
+	IdentityHash string
+	SyncedAt     time.Time
 }
 
 // UpsertSaveState records (or updates) the current synced state for a local save.
@@ -57,14 +60,15 @@ func (cm *Manager) UpsertSaveState(deviceID string, state SaveSyncState) error {
 	defer cm.mu.Unlock()
 
 	_, err := cm.db.Exec(`
-		INSERT INTO save_sync_state (device_id, rom_id, file_name, slot, save_id, content_hash, synced_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO save_sync_state (device_id, rom_id, file_name, slot, save_id, content_hash, identity_hash, synced_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(device_id, rom_id, file_name) DO UPDATE SET
 			slot = excluded.slot,
 			save_id = excluded.save_id,
 			content_hash = excluded.content_hash,
+			identity_hash = excluded.identity_hash,
 			synced_at = excluded.synced_at
-	`, deviceID, state.RomID, state.FileName, state.Slot, state.SaveID, state.ContentHash, nowUTC())
+	`, deviceID, state.RomID, state.FileName, state.Slot, state.SaveID, state.ContentHash, state.IdentityHash, nowUTC())
 
 	if err != nil {
 		gaba.GetLogger().Error("Failed to upsert save sync state", "romID", state.RomID, "file", state.FileName, "error", err)
@@ -82,7 +86,7 @@ func (cm *Manager) GetSaveStates(deviceID string) []SaveSyncState {
 	defer cm.mu.RUnlock()
 
 	rows, err := cm.db.Query(`
-		SELECT rom_id, file_name, slot, save_id, content_hash, synced_at
+		SELECT rom_id, file_name, slot, save_id, content_hash, identity_hash, synced_at
 		FROM save_sync_state
 		WHERE device_id = ?
 	`, deviceID)
@@ -96,9 +100,9 @@ func (cm *Manager) GetSaveStates(deviceID string) []SaveSyncState {
 	for rows.Next() {
 		var s SaveSyncState
 		var saveID *int
-		var contentHash *string
+		var contentHash, identityHash *string
 		var syncedAt string
-		if err := rows.Scan(&s.RomID, &s.FileName, &s.Slot, &saveID, &contentHash, &syncedAt); err != nil {
+		if err := rows.Scan(&s.RomID, &s.FileName, &s.Slot, &saveID, &contentHash, &identityHash, &syncedAt); err != nil {
 			continue
 		}
 		if saveID != nil {
@@ -106,6 +110,9 @@ func (cm *Manager) GetSaveStates(deviceID string) []SaveSyncState {
 		}
 		if contentHash != nil {
 			s.ContentHash = *contentHash
+		}
+		if identityHash != nil {
+			s.IdentityHash = *identityHash
 		}
 		if parsed, err := time.Parse(time.RFC3339, syncedAt); err == nil {
 			s.SyncedAt = parsed

@@ -12,7 +12,7 @@ import (
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 )
 
-const schemaVersion = 14
+const schemaVersion = 15
 
 // nowUTC returns the current UTC time formatted as RFC3339 for consistent datetime storage
 func nowUTC() string {
@@ -153,7 +153,45 @@ func migrateIfNeeded(db *sql.DB) error {
 		}
 	}
 
+	// v15 adds identity_hash to save_sync_state: a save's hash ignoring clock files.
+	if currentVersion < 15 {
+		if err := addColumnIfMissing(db, "save_sync_state", "identity_hash", "TEXT"); err != nil {
+			return fmt.Errorf("migration to v15 failed: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// addColumnIfMissing adds column to table when the table exists and lacks it.
+// A missing table is left alone: createTables makes it with the column.
+// Migrations run before createTables, so the table may not exist yet.
+func addColumnIfMissing(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	var exists, has bool
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		exists = true
+		if name == column {
+			has = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !exists || has {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl)
+	return err
 }
 
 // backfillMetadataJunctions (re)builds every metadata junction table (game_genres,
@@ -599,6 +637,7 @@ func createTables(db *sql.DB) error {
 			slot TEXT NOT NULL,
 			save_id INTEGER,
 			content_hash TEXT,
+			identity_hash TEXT,
 			synced_at TEXT NOT NULL,
 			PRIMARY KEY (device_id, rom_id, file_name)
 		)
