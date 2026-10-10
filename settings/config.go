@@ -89,6 +89,11 @@ type Config struct {
 	SlotPreferences       map[string]string `json:"-"`                           // Stored in save_slots.json, not config.json
 	SaveBackupLimit       int               `json:"save_backup_limit,omitempty"` // 0 = no limit, 5/10/15 = keep N most recent per game
 
+	// SaveExtensionOverrides sets the extension a downloaded save is written with
+	// when the ROM has no local save yet, keyed by RomM fs slug (e.g. "nds": "sav").
+	// A platform not listed keeps the server's extension.
+	SaveExtensionOverrides map[string]string `json:"save_extension_overrides,omitempty"`
+
 	PlatformsBinding map[string]string `json:"-"`
 }
 
@@ -347,6 +352,30 @@ func (c *Config) SetSlotPreference(romID int, slot string) {
 	// selection override a sticky recorded slot via SlotPreferenceExplicit (issue #250);
 	// previously "autosave" was discarded, so a recorded "default" could never be undone.
 	c.SlotPreferences[key] = slot
+}
+
+// SaveExtensionFor returns the extension (without the dot) a downloaded save for
+// the platform is written with when its ROM has no local save, if one is set.
+func (c *Config) SaveExtensionFor(fsSlug string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	ext, ok := c.SaveExtensionOverrides[strings.ToLower(fsSlug)]
+	return ext, ok && ext != ""
+}
+
+// SetSaveExtension sets the platform's download extension; "" removes it, so the
+// server's extension applies again.
+func (c *Config) SetSaveExtension(fsSlug, ext string) {
+	key := strings.ToLower(fsSlug)
+	if ext == "" {
+		delete(c.SaveExtensionOverrides, key)
+		return
+	}
+	if c.SaveExtensionOverrides == nil {
+		c.SaveExtensionOverrides = make(map[string]string)
+	}
+	c.SaveExtensionOverrides[key] = ext
 }
 
 func (c Config) GetApiTimeout() time.Duration    { return c.ApiTimeout.Duration() }

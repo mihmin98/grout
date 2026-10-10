@@ -349,12 +349,26 @@ func mapOperationsToItems(
 	// per ROM, so a ROM that already has a local save only ever syncs that save's slot.
 	localByRom := make(map[int]LocalSave, len(localSaves))
 	for _, ls := range localSaves {
+		// The first save scanned wins, unless the platform has a save extension
+		// set and only the later one carries it (Game.srm and Game.sav for one NDS
+		// game: the one the emulator here reads is synced).
 		rsk := romSlotKey{ls.RomID, resolveReportedSlot(ls, config, recordedSlots)}
-		if _, ok := byRomSlot[rsk]; !ok {
+		if cur, ok := byRomSlot[rsk]; !ok || prefersSaveExtension(ls, cur, config) {
 			byRomSlot[rsk] = ls
 		}
-		if _, ok := localByRom[ls.RomID]; !ok {
+		cur, ok := localByRom[ls.RomID]
+		if !ok {
 			localByRom[ls.RomID] = ls
+			continue
+		}
+		if _, set := config.SaveExtensionFor(ls.FSSlug); set {
+			synced, other := cur, ls
+			if prefersSaveExtension(ls, cur, config) {
+				localByRom[ls.RomID] = ls
+				synced, other = ls, cur
+			}
+			logger.Warn("ROM has two local saves; syncing the one with the platform's save extension",
+				"romID", ls.RomID, "synced", synced.FilePath, "ignored", other.FilePath)
 		}
 	}
 
@@ -498,6 +512,19 @@ func mapOperationsToItems(
 	}
 
 	return items
+}
+
+// prefersSaveExtension reports whether candidate should replace current as a
+// ROM's synced save: the platform has a save extension set and only candidate
+// carries it.
+func prefersSaveExtension(candidate, current LocalSave, config *settings.Config) bool {
+	ext, ok := config.SaveExtensionFor(candidate.FSSlug)
+	if !ok {
+		return false
+	}
+	want := "." + ext
+	return strings.EqualFold(filepath.Ext(candidate.FileName), want) &&
+		!strings.EqualFold(filepath.Ext(current.FileName), want)
 }
 
 // reportedOpSlot returns the slot a negotiate op is paired on, treating a nil/empty slot
@@ -704,12 +731,20 @@ func downloadSaveFileName(romFileName, serverFileName, serverExt string, keepRom
 // downloadSaveName is the name a downloaded save is written under. A firmware
 // that says how its emulator names saves, like NextUI's Save format setting,
 // decides both the style and the extension. Elsewhere the style is read off the
-// saves already in saveDir and the server's extension is kept.
-func downloadSaveName(romFileName, serverFileName, serverExt, saveDir string) string {
+// saves already in saveDir and the server's extension is kept. extOverride, the
+// user's extension for the platform (Config.SaveExtensionFor), wins over both.
+func downloadSaveName(romFileName, serverFileName, serverExt, saveDir, extOverride string) string {
 	if keep, ext, ok := cfw.ActiveFirmware().SaveNaming(); ok {
+		if extOverride != "" {
+			ext = extOverride
+		}
 		return downloadSaveFileName(romFileName, serverFileName, ext, keep)
 	}
-	return downloadSaveFileName(romFileName, serverFileName, serverExt, detectSaveNameStyle(saveDir))
+	ext := serverExt
+	if extOverride != "" {
+		ext = extOverride
+	}
+	return downloadSaveFileName(romFileName, serverFileName, ext, detectSaveNameStyle(saveDir))
 }
 
 // saveDirKeepsRomExt infers whether the emulator that owns saveDir names saves after the
@@ -1629,7 +1664,8 @@ func derivedSavePath(item SyncItem, config *settings.Config, ext string) string 
 	if saveDir == "" {
 		return ""
 	}
-	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, ext, saveDir)
+	override, _ := config.SaveExtensionFor(item.LocalSave.FSSlug)
+	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, ext, saveDir, override)
 	return filepath.Join(saveDir, fileName)
 }
 

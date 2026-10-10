@@ -450,3 +450,51 @@ func TestBackupFile_MissingFileIsNoOp(t *testing.T) {
 		t.Errorf("backup folder created for a missing file (err %v)", err)
 	}
 }
+
+// W11: with the option set, a new NDS save from Argosy (Game.srm) lands as the
+// Game.sav DSperate reads, raw or zipped.
+func TestPlanFileDownload_ExtOverrideForNewSave(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	cfg := &settings.Config{}
+	cfg.SetSaveExtension("nds", "sav")
+
+	for name, payload := range map[string][]byte{
+		"raw": []byte("nds save"),
+		"zip": testZip(t, map[string]string{"Game.srm": "nds save"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			item := downloadItem(dir, "Game.nds", "Game [2026].srm", "srm")
+			item.LocalSave.FSSlug = "nds"
+			p, err := planFileDownload(item, payload, cfg, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(dir, "Game.sav"); p.primary != want {
+				t.Errorf("primary = %q, want %q", p.primary, want)
+			}
+		})
+	}
+}
+
+// W12: the option only names new saves; an existing local save is written in place.
+func TestPlanFileDownload_OverrideIgnoredForLocalSave(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	dir := t.TempDir()
+	local := filepath.Join(dir, "Game.sav")
+	writeTestFile(t, local, "old")
+	cfg := &settings.Config{}
+	cfg.SetSaveExtension("nds", "srm")
+
+	item := downloadItem(dir, "Game.nds", "Game [2026].srm", "srm")
+	item.LocalSave.FSSlug = "nds"
+	item.LocalSave.FileName = "Game.sav"
+	item.LocalSave.FilePath = local
+	p, err := planFileDownload(item, []byte("new"), cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.primary != local {
+		t.Errorf("primary = %q, want the local %q", p.primary, local)
+	}
+}

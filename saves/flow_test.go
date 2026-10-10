@@ -1008,7 +1008,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 	t.Setenv("BASE_PATH", base)
 	t.Setenv(cfw.EnvVar, string(cfw.NextUI))
 
-	name := downloadSaveName("Game (USA).sfc", "Game (USA) [2026-01-01_00-00-00].srm", "srm", t.TempDir())
+	name := downloadSaveName("Game (USA).sfc", "Game (USA) [2026-01-01_00-00-00].srm", "srm", t.TempDir(), "")
 	if name != "Game (USA).sfc.sav" {
 		t.Errorf("default format: %q, want Game (USA).sfc.sav", name)
 	}
@@ -1020,7 +1020,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "minuisettings.txt"), []byte("saveFormat=2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir()); name != "Game (USA).sav" {
+	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).sav" {
 		t.Errorf("generic format: %q, want Game (USA).sav", name)
 	}
 }
@@ -1029,7 +1029,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 // server's extension is kept.
 func TestDownloadSaveName_OtherFirmwaresUnchanged(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.Knulli))
-	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir()); name != "Game (USA).srm" {
+	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).srm" {
 		t.Errorf("knulli: %q, want Game (USA).srm", name)
 	}
 }
@@ -1038,7 +1038,7 @@ func TestDownloadSaveName_OtherFirmwaresUnchanged(t *testing.T) {
 // with no setting to change it.
 func TestDownloadSaveName_MinUIAlwaysSav(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.MinUI))
-	if name := downloadSaveName("Game (USA).gba", "x.srm", "srm", t.TempDir()); name != "Game (USA).gba.sav" {
+	if name := downloadSaveName("Game (USA).gba", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).gba.sav" {
 		t.Errorf("minui: %q, want Game (USA).gba.sav", name)
 	}
 }
@@ -1188,5 +1188,64 @@ func TestIsBackupOf(t *testing.T) {
 		if got := isBackupOf(tt.name, "Crystal", ".srm"); got != tt.want {
 			t.Errorf("isBackupOf(%q) = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+// --- NDS save extension tests ---
+
+// melonDS DS (Argosy) saves Game.srm, DSperate (ROCKNIX) reads Game.sav: the
+// override names a new download the way the emulator here expects.
+func TestDownloadSaveName_ExtOverride(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
+	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", t.TempDir(), "sav"); got != "Game.sav" {
+		t.Errorf("override: %q, want Game.sav", got)
+	}
+	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", t.TempDir(), ""); got != "Game.srm" {
+		t.Errorf("no override: %q, want Game.srm", got)
+	}
+
+	// Saves here keep the ROM extension: the style stays, the extension changes.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Other.nds.sav"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", dir, "sav"); got != "Game.nds.sav" {
+		t.Errorf("ROM-extension style: %q, want Game.nds.sav", got)
+	}
+}
+
+// W13: a stray Game.srm next to DSperate's Game.sav; with the option set to .sav
+// the .sav is synced, whichever was scanned first.
+func TestMapOperationsToItems_PrefersOverrideExtension(t *testing.T) {
+	dir := t.TempDir()
+	srm := LocalSave{RomID: 9, FSSlug: "nds", FileName: "Game.srm", FilePath: filepath.Join(dir, "Game.srm")}
+	sav := LocalSave{RomID: 9, FSSlug: "nds", FileName: "Game.sav", FilePath: filepath.Join(dir, "Game.sav")}
+	cfg := &settings.Config{}
+	cfg.SetSaveExtension("nds", "sav")
+
+	saveID := 40
+	now := time.Now()
+	ops := []romm.SyncOperationSchema{
+		{Action: "upload", RomID: 9, Slot: ptrStr("autosave"), FileName: "Game.sav"},
+		{Action: "download", RomID: 9, Slot: ptrStr("autosave"), FileName: "Game [2026].srm", SaveID: &saveID, ServerUpdatedAt: &now},
+	}
+
+	for _, order := range [][]LocalSave{{srm, sav}, {sav, srm}} {
+		items := mapOperationsToItems(ops, order, nil, nil, cfg, nil, nil)
+		if len(items) != 2 {
+			t.Fatalf("scan order %s, %s: %d items, want 2", order[0].FileName, order[1].FileName, len(items))
+		}
+		for _, it := range items {
+			if it.LocalSave.FileName != "Game.sav" {
+				t.Errorf("scan order %s, %s: %s item uses %s, want Game.sav",
+					order[0].FileName, order[1].FileName, it.Action, it.LocalSave.FileName)
+			}
+		}
+	}
+
+	// Without the option the first scanned save is kept, as before.
+	items := mapOperationsToItems(ops[:1], []LocalSave{srm, sav}, nil, nil, &settings.Config{}, nil, nil)
+	if len(items) != 1 || items[0].LocalSave.FileName != "Game.srm" {
+		t.Errorf("no option: %+v, want the first scanned Game.srm", items)
 	}
 }

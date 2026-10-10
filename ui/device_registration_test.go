@@ -85,3 +85,35 @@ func TestSaveSyncRows_UnsetLimitShowsNoLimit(t *testing.T) {
 	}
 	t.Fatal("no backup limit row")
 }
+
+// The NDS Save Extension row reads and writes the nds entry of
+// SaveExtensionOverrides; "Server's" removes it.
+func TestSaveSyncRows_NDSSaveExtension(t *testing.T) {
+	for _, ext := range []string{"sav", "srm", ""} {
+		before := settings.Config{}
+		before.SetSaveExtension("nds", ext)
+		after := settings.Config{}
+		after.SetSaveExtension("nds", "srm") // a different value, to be overwritten
+
+		rows := saveSyncRows(settings.Host{})
+		applySettingRows(rows, &after, settingItems(rows, before))
+
+		got, ok := after.SaveExtensionFor("nds")
+		if got != ext || ok != (ext != "") {
+			t.Errorf("%q came back as %q (set %v)", ext, got, ok)
+		}
+	}
+
+	rows := saveSyncRows(settings.Host{})
+	items := settingItems(rows, settings.Config{})
+	for i, row := range rows {
+		if row.key != "nds_save_extension" {
+			continue
+		}
+		if got := items[i].Options[items[i].SelectedOption].Value; got != "" {
+			t.Errorf("unset option opens on %v, want the server's extension", got)
+		}
+		return
+	}
+	t.Fatal("no NDS save extension row")
+}

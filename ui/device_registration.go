@@ -131,6 +131,18 @@ func saveSyncRows(host settings.Host) []settingRow {
 			set:     assign(func(c *settings.Config, v int) { c.SaveBackupLimit = v }),
 			def:     0,
 		},
+		{
+			// melonDS DS (RetroArch) saves NDS games as .srm, DSperate as .sav: the
+			// extension a new save from another device gets on this one.
+			key: "nds_save_extension", label: localize("save_sync_nds_save_extension", "NDS Save Extension"),
+			options: ndsSaveExtensionOptions(),
+			get: func(c settings.Config) any {
+				ext, _ := c.SaveExtensionFor("nds")
+				return ext
+			},
+			set: assign(func(c *settings.Config, v string) { c.SetSaveExtension("nds", v) }),
+			def: "",
+		},
 		clickableRow("save_mapping", "sync_menu_save_mapping", "Save Mapping"),
 	}
 }
@@ -232,6 +244,14 @@ func askDeviceName(current string) (string, error) {
 
 // backupLimitOptions offers how many old copies of a save to keep. Zero is no
 // limit, which is what an unset config means.
+func ndsSaveExtensionOptions() []gaba.Option {
+	return []gaba.Option{
+		{DisplayName: localize("save_sync_nds_save_extension_server", "Server's"), Value: ""},
+		{DisplayName: ".sav", Value: "sav"},
+		{DisplayName: ".srm", Value: "srm"},
+	}
+}
+
 func backupLimitOptions() []gaba.Option {
 	return []gaba.Option{
 		{DisplayName: "5", Value: 5},
