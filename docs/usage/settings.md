@@ -186,10 +186,16 @@ directory are listed.
 
 Controls how many backup copies of local saves are retained when a newer save is downloaded from the server:
 
-- **5** / **10** / **15** - Keep the N most recent backups per game
+- **5** / **10** / **15** - Keep the N most recent backups per game and file type
 - **No Limit** - Keep all backups (default)
 
 Backups are stored in a `.backup/` directory within each platform's save directory.
+
+### NDS Save Extension
+
+Sets the extension a downloaded NDS save gets when the game has no save on this device yet: **Server's** (default),
+**.sav** or **.srm**. Use **.sav** for DSperate when your saves come from melonDS DS (RetroArch), which uses `.srm`.
+See [NDS save extension](save-sync.md#nds-save-extension).
 
 ---
 

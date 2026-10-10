@@ -14,7 +14,7 @@ import (
 
 func main() {
 	scenario := flag.String("scenario", "", "run an offline fix-verification scenario instead of a live dry-run "+
-		"(slot-switch, nextui-keep, nextui-retroarch, all; requires -tags dryrun)")
+		"(slot-switch, nextui-keep, nextui-retroarch, clock-tick, all; requires -tags dryrun)")
 	flag.Parse()
 
 	// Offline scenario mode: exercise the fixed resolution logic with synthetic inputs, no

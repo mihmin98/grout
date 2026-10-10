@@ -25,8 +25,10 @@ func RunScenario(name string, w io.Writer) error {
 		return scenarioNextUINaming(w, true)
 	case "nextui-retroarch":
 		return scenarioNextUINaming(w, false)
+	case "clock-tick":
+		return scenarioClockTick(w)
 	case "all":
-		for _, s := range []string{"slot-switch", "nextui-keep", "nextui-retroarch"} {
+		for _, s := range []string{"slot-switch", "nextui-keep", "nextui-retroarch", "clock-tick"} {
 			if err := RunScenario(s, w); err != nil {
 				return err
 			}
@@ -34,7 +36,7 @@ func RunScenario(name string, w io.Writer) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown scenario %q (want: slot-switch, nextui-keep, nextui-retroarch, all)", name)
+		return fmt.Errorf("unknown scenario %q (want: slot-switch, nextui-keep, nextui-retroarch, clock-tick, all)", name)
 	}
 }
 
@@ -162,6 +164,80 @@ func scenarioNextUINaming(w io.Writer, keepStyle bool) error {
 	fmt.Fprintf(w, "\n  %s: save round-trips for this naming style.\n", passFail(ok))
 	if !ok {
 		return fmt.Errorf("scenario nextui naming (keepStyle=%v) failed: read=%v write=%v", keepStyle, readOK, writeOK)
+	}
+	return nil
+}
+
+// scenarioClockTick shows that a RetroArch clock file (.rtc) ticking on its own is
+// not reported as new progress, while a changed save (.srm) is. It drives the real
+// scan pairing (findCompanions), hashing (saveHashes) and negotiate payload
+// (buildClientSaveStates with the recorded hashes).
+func scenarioClockTick(w io.Writer) error {
+	dir, err := os.MkdirTemp("", "grout-dryrun-clock-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+
+	const romID = 6
+	srm := filepath.Join(dir, "Pokemon - Crystal Version (USA, Europe).srm")
+	rtc := filepath.Join(dir, "Pokemon - Crystal Version (USA, Europe).rtc")
+	write := func(path, content string) error { return os.WriteFile(path, []byte(content), 0644) }
+	if err := write(srm, "progress-1"); err != nil {
+		return err
+	}
+	if err := write(rtc, "clock-1"); err != nil {
+		return err
+	}
+
+	ls := LocalSave{
+		RomID:      romID,
+		FileName:   filepath.Base(srm),
+		FilePath:   srm,
+		Companions: findCompanions(srm, []string{filepath.Base(srm), filepath.Base(rtc)}),
+	}
+	content, identity, err := saveHashes(ls)
+	if err != nil {
+		return err
+	}
+	// What a sync records: the server's hash of the uploaded zip and the .srm's MD5.
+	recorded := map[saveKey]recordedHash{{romID: romID, fileName: ls.FileName}: {Content: content, Identity: identity}}
+	reported := func() (string, error) {
+		states := buildClientSaveStates([]LocalSave{ls}, nil, nil, recorded)
+		if len(states) != 1 {
+			return "", fmt.Errorf("expected one negotiate state, got %d", len(states))
+		}
+		return states[0].ContentHash, nil
+	}
+
+	fmt.Fprintln(w, "Scenario: a RetroArch clock file (.rtc) ticking is not new progress")
+	fmt.Fprintf(w, "  save:  %s + %d companion(s)\n", ls.FileName, len(ls.Companions))
+	fmt.Fprintf(w, "  recorded at last sync: content %s, identity %s\n\n", content, identity)
+
+	if err := write(rtc, "clock-2"); err != nil {
+		return err
+	}
+	afterTick, err := reported()
+	if err != nil {
+		return err
+	}
+	tickOK := afterTick == content
+	fmt.Fprintf(w, "  .rtc rewritten, .srm unchanged -> reports %s (recorded) -> %s\n", afterTick, passFail(tickOK))
+
+	if err := write(srm, "progress-2"); err != nil {
+		return err
+	}
+	afterSave, err := reported()
+	if err != nil {
+		return err
+	}
+	saveOK := afterSave != content
+	fmt.Fprintf(w, "  .srm changed                   -> reports %s (new)      -> %s\n", afterSave, passFail(saveOK))
+
+	ok := tickOK && saveOK
+	fmt.Fprintf(w, "\n  %s: only a changed .srm counts as progress.\n", passFail(ok))
+	if !ok {
+		return fmt.Errorf("scenario clock-tick failed: tick=%v save=%v", tickOK, saveOK)
 	}
 	return nil
 }

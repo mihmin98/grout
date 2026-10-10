@@ -140,8 +140,10 @@ Your slot preferences are stored in `save_slots.json`, separate from the main co
 When Grout downloads a newer save from RomM, it backs up your current local save to a `.backup/` directory. You can
 control how many backups are kept per game in **Settings > Save Sync > Save Backups**:
 
-- **5** / **10** / **15** - Keep the N most recent backups per game, automatically deleting older ones
+- **5** / **10** / **15** - Keep the N most recent backups per game and file type, automatically deleting older ones
 - **No Limit** - Keep all backups (default)
+
+A game's save and its clock file (`.rtc`) each keep their own N backups.
 
 ---
 
@@ -201,6 +203,33 @@ If you notice that a save that is not being synced has an extension not in this 
 On NextUI, a downloaded save is named the way the **Save format** setting says, whatever it was called on the server:
 `Game.gba.sav` for MinUI (the default), `Game.srm` for RetroArch, and `Game.sav` for Generic.
 MinUI has no such setting and always uses `Game.gba.sav`, so that is how saves are written there.
+
+### Clock files (`.rtc`) on ROCKNIX
+
+Some games keep a real-time clock, such as Pokemon Gold, Silver and Crystal. RetroArch saves them as two files next to
+each other: `Game.srm` (the save) and `Game.rtc` (the clock). On ROCKNIX, Grout syncs the two together:
+
+- The pair is uploaded as one `Game.zip` holding both files, the same format Argosy uses, so saves move between
+  Grout and Argosy in both directions.
+- A downloaded zip is unpacked back into `Game.srm` and `Game.rtc`. If your local `.rtc` has a different size from
+  the one downloaded (a different clock format), your local clock file is kept and only the save is replaced.
+- Playing without saving rewrites the `.rtc` but not the `.srm`. That is not treated as new progress, so it does
+  not cause an upload.
+
+On other firmwares only the `.srm` is synced. A downloaded zip is still unpacked: its save is written and the clock
+file is skipped.
+
+### NDS save extension
+
+The same NDS save works in different emulators under different names: melonDS DS (RetroArch) uses `Game.srm`,
+DSperate uses `Game.sav`. **Settings > Save Sync > NDS Save Extension** sets the extension a downloaded NDS save is
+given when the game has no save on this device yet:
+
+- **Server's** - Keep the extension the save has on the server (default)
+- **.sav** / **.srm** - Always use this extension
+
+Once a game has a local save, downloads are written into that file, whatever the setting. If a game ends up with
+both `Game.srm` and `Game.sav`, the one matching the setting is synced; delete the other one.
 
 ### Syncs can be obscured by autoload { data-toc-label="Autoload Warning" }
 
