@@ -11,7 +11,7 @@ import (
 func strPtr(s string) *string { return &s }
 
 // writeLocalSave creates a real save file on disk and returns a LocalSave pointing
-// at it, so saveContentHash can hash actual bytes.
+// at it, so saveHashes can hash actual bytes.
 func writeLocalSave(t *testing.T, romID int, fileName, content string) LocalSave {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), fileName)
@@ -37,13 +37,13 @@ func countUploads(items []SyncItem) int {
 // re-uploading it is the spurious "uploads everything I just downloaded" churn.
 func TestMapOperationsToItems_SuppressesUnchangedPromotionUpload(t *testing.T) {
 	ls := writeLocalSave(t, 155, "Kirby's Pinball Land (USA, Europe).srm", "SAVE-CONTENT")
-	hash, err := saveContentHash(ls)
+	hash, _, err := saveHashes(ls)
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
 
 	recordedSlots := map[saveKey]string{{155, ls.FileName}: "autosave"}
-	recordedHashes := map[saveKey]string{{155, ls.FileName}: hash}
+	recordedHashes := map[saveKey]recordedHash{{155, ls.FileName}: {Content: hash, Identity: hash}}
 
 	ops := []romm.SyncOperationSchema{{
 		Action:   "upload",
@@ -65,7 +65,7 @@ func TestMapOperationsToItems_UploadsWhenContentChangedSinceDownload(t *testing.
 	ls := writeLocalSave(t, 155, "Kirby's Pinball Land (USA, Europe).srm", "NEW-PROGRESS")
 
 	recordedSlots := map[saveKey]string{{155, ls.FileName}: "autosave"}
-	recordedHashes := map[saveKey]string{{155, ls.FileName}: "stale-hash-from-earlier-download"}
+	recordedHashes := map[saveKey]recordedHash{{155, ls.FileName}: {Content: "stale-hash-from-earlier-download", Identity: "stale-identity"}}
 
 	ops := []romm.SyncOperationSchema{{
 		Action:   "upload",
@@ -86,7 +86,7 @@ func TestMapOperationsToItems_UploadsNewSaveWithNoDownloadRecord(t *testing.T) {
 	ls := writeLocalSave(t, 200, "Tecmo Super Bowl 2025.srm", "FRESH-SAVE")
 
 	recordedSlots := map[saveKey]string{{200, ls.FileName}: "autosave"}
-	recordedHashes := map[saveKey]string{} // never downloaded
+	recordedHashes := map[saveKey]recordedHash{} // never downloaded
 
 	ops := []romm.SyncOperationSchema{{
 		Action:   "upload",

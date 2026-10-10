@@ -78,7 +78,7 @@ func scenarioSlotSwitch(w io.Writer) error {
 	fmt.Fprintf(w, "  ROM %d (%s), recorded slot on this device: %q\n\n", romID, fileName, "default")
 
 	// No explicit preference yet: the sticky recorded slot is reported.
-	before := buildClientSaveStates(local, &settings.Config{}, recorded)
+	before := buildClientSaveStates(local, &settings.Config{}, recorded, nil)
 	fmt.Fprintf(w, "  no explicit preference        -> reports slot %q  (recorded slot)\n", before[0].Slot)
 
 	// User picks "autosave" in the UI. Pre-fix this was discarded (SlotPreferenceExplicit
@@ -86,7 +86,7 @@ func scenarioSlotSwitch(w io.Writer) error {
 	cfg := &settings.Config{}
 	cfg.SetSlotPreference(romID, "autosave")
 	_, explicit := cfg.SlotPreferenceExplicit(romID)
-	after := buildClientSaveStates(local, cfg, recorded)
+	after := buildClientSaveStates(local, cfg, recorded, nil)
 	fmt.Fprintf(w, "  user picks autosave in the UI -> SlotPreferenceExplicit=%v, reports slot %q  (explicit choice wins)\n", explicit, after[0].Slot)
 
 	ok := explicit && after[0].Slot == "autosave"

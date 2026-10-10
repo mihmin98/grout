@@ -39,7 +39,7 @@ func ResolveSaveSync(client *romm.Client, config *settings.Config, deviceID stri
 
 	recordedSlots := loadRecordedSlots(deviceID)
 	recordedHashes := loadRecordedHashes(deviceID)
-	states := buildClientSaveStates(localSaves, config, recordedSlots)
+	states := buildClientSaveStates(localSaves, config, recordedSlots, recordedHashes)
 
 	// Diagnostic: log exactly what we send the orchestrator (rom/slot/hash).
 	for _, s := range states {
@@ -331,7 +331,7 @@ func mapOperationsToItems(
 	cm *cache.Manager,
 	config *settings.Config,
 	recordedSlots map[saveKey]string,
-	recordedHashes map[saveKey]string,
+	recordedHashes map[saveKey]recordedHash,
 ) []SyncItem {
 	logger := gaba.GetLogger()
 
@@ -392,9 +392,9 @@ func mapOperationsToItems(
 			// negotiate doesn't pair on (e.g. a null-slot "archival" save). Re-uploading
 			// it now would only duplicate it (the "uploads everything I just downloaded"
 			// churn). It uploads later once the user actually changes the save and the
-			// hash diverges.
-			if rec, ok := recordedHashes[saveKey{ls.RomID, ls.FileName}]; ok && rec != "" {
-				if localHash, err := saveContentHash(ls); err == nil && localHash == rec {
+			// hash diverges. A clock-only change still counts as unchanged (reportedHash).
+			if rec, ok := recordedHashes[saveKey{ls.RomID, ls.FileName}]; ok && rec.Content != "" {
+				if localHash, err := reportedHash(ls, rec); err == nil && localHash == rec.Content {
 					logger.Debug("Skipping upload: content unchanged since download (already on server)",
 						"romID", op.RomID, "slot", slot, "file", ls.FileName)
 					continue
@@ -977,10 +977,17 @@ func loadRecordedSlots(deviceID string) map[saveKey]string {
 	return out
 }
 
+// recordedHash is what was recorded for a save at its last sync: the server's
+// content hash and the save's identity hash (its hash ignoring clock files).
+type recordedHash struct {
+	Content  string
+	Identity string
+}
+
 // loadRecordedHashes reads the persisted save-sync state for a device into a
-// content-hash lookup keyed by (rom_id, file_name). Used to suppress re-uploading a
+// hash lookup keyed by (rom_id, file_name). Used to suppress re-uploading a
 // downloaded save whose content the user hasn't changed (it's already on the server).
-func loadRecordedHashes(deviceID string) map[saveKey]string {
+func loadRecordedHashes(deviceID string) map[saveKey]recordedHash {
 	cm := cache.GetCacheManager()
 	if cm == nil {
 		return nil
@@ -989,26 +996,27 @@ func loadRecordedHashes(deviceID string) map[saveKey]string {
 	if len(states) == 0 {
 		return nil
 	}
-	out := make(map[saveKey]string, len(states))
+	out := make(map[saveKey]recordedHash, len(states))
 	for _, s := range states {
-		out[saveKey{s.RomID, s.FileName}] = s.ContentHash
+		out[saveKey{s.RomID, s.FileName}] = recordedHash{Content: s.ContentHash, Identity: s.IdentityHash}
 	}
 	return out
 }
 
 // recordSaveState upserts the current synced state for a local save after a
 // successful upload or download, so subsequent syncs report the same slot/identity.
-func recordSaveState(deviceID string, romID int, fileName, slot string, saveID int, contentHash string) {
+func recordSaveState(deviceID string, romID int, fileName, slot string, saveID int, contentHash, identityHash string) {
 	cm := cache.GetCacheManager()
 	if cm == nil || fileName == "" {
 		return
 	}
 	if err := cm.UpsertSaveState(deviceID, cache.SaveSyncState{
-		RomID:       romID,
-		FileName:    fileName,
-		Slot:        slot,
-		SaveID:      saveID,
-		ContentHash: contentHash,
+		RomID:        romID,
+		FileName:     fileName,
+		Slot:         slot,
+		SaveID:       saveID,
+		ContentHash:  contentHash,
+		IdentityHash: identityHash,
 	}); err != nil {
 		gaba.GetLogger().Warn("Failed to record save state", "romID", romID, "file", fileName, "error", err)
 	}
@@ -1047,7 +1055,7 @@ func resolveReportedSlot(ls LocalSave, config *settings.Config, recordedSlots ma
 	return slot
 }
 
-func buildClientSaveStates(localSaves []LocalSave, config *settings.Config, recordedSlots map[saveKey]string) []romm.ClientSaveState {
+func buildClientSaveStates(localSaves []LocalSave, config *settings.Config, recordedSlots map[saveKey]string, recordedHashes map[saveKey]recordedHash) []romm.ClientSaveState {
 	logger := gaba.GetLogger()
 	states := make([]romm.ClientSaveState, 0, len(localSaves))
 
@@ -1083,9 +1091,17 @@ func buildClientSaveStates(localSaves []LocalSave, config *settings.Config, reco
 				logger.Warn("Cannot stat local save, skipping from negotiate", "path", ls.FilePath, "error", err)
 				continue
 			}
+			// A clock-only change must not look newer: the primary's mtime stands for
+			// the whole save, while the size counts every file.
 			updatedAt = info.ModTime().Truncate(time.Second)
 			size = info.Size()
-			h, herr := hashing.ComputeMD5(ls.FilePath)
+			companionSize, serr := filesSize(ls.Companions)
+			if serr != nil {
+				logger.Warn("Cannot stat save companion, skipping from negotiate", "path", ls.FilePath, "error", serr)
+				continue
+			}
+			size += companionSize
+			h, herr := reportedHash(ls, recordedHashes[saveKey{ls.RomID, ls.FileName}])
 			if herr != nil {
 				logger.Warn("Failed to hash local save; skipping from negotiate", "romID", ls.RomID, "path", ls.FilePath, "error", herr)
 				continue
@@ -1107,16 +1123,58 @@ func buildClientSaveStates(localSaves []LocalSave, config *settings.Config, reco
 	return states
 }
 
-// saveContentHash returns the server-compatible content hash for a local save.
-func saveContentHash(ls LocalSave) (string, error) {
+// saveHashes returns a local save's content hash (what the server would compute
+// for its upload) and its identity hash (the same save ignoring clock files).
+// They differ only for a save with companions: content is then the composite
+// hash of the flat zip it uploads as, identity the primary file's MD5.
+func saveHashes(ls LocalSave) (content, identity string, err error) {
 	if ls.IsDirectorySave {
 		dirs := ls.RelatedDirs
 		if len(dirs) == 0 {
 			dirs = []string{ls.FilePath}
 		}
-		return hashing.ComputeDirsCompositeHash(dirs)
+		h, err := hashing.ComputeDirsCompositeHash(dirs)
+		return h, h, err
 	}
-	return hashing.ComputeMD5(ls.FilePath)
+	identity, err = hashing.ComputeMD5(ls.FilePath)
+	if err != nil {
+		return "", "", err
+	}
+	if len(ls.Companions) == 0 {
+		return identity, identity, nil
+	}
+	content, err = hashing.ComputeFilesCompositeHash(append([]string{ls.FilePath}, ls.Companions...))
+	if err != nil {
+		return "", "", err
+	}
+	return content, identity, nil
+}
+
+// reportedHash is the hash a local save is presented under: the recorded
+// (server) hash when only its clock changed since the last sync, else its
+// current content hash.
+func reportedHash(ls LocalSave, rec recordedHash) (string, error) {
+	content, identity, err := saveHashes(ls)
+	if err != nil {
+		return "", err
+	}
+	if rec.Identity != "" && rec.Content != "" && identity == rec.Identity {
+		return rec.Content, nil
+	}
+	return content, nil
+}
+
+// filesSize is the total size of the given files.
+func filesSize(paths []string) (int64, error) {
+	var total int64
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return 0, err
+		}
+		total += info.Size()
+	}
+	return total, nil
 }
 
 // SelectSaveForSlot picks the latest save in preferredSlot, falling back to the
@@ -1302,8 +1360,8 @@ func buildUploadQuery(deviceID string, item *SyncItem) romm.UploadSaveQuery {
 func resolveUploadConflict(client *romm.Client, deviceID string, item *SyncItem, slot string, cause error) uploadOutcome {
 	logger := gaba.GetLogger()
 
-	localHash, _ := saveContentHash(item.LocalSave)
-	recordedHash := loadRecordedHashes(deviceID)[saveKey{item.LocalSave.RomID, item.LocalSave.FileName}]
+	rec := loadRecordedHashes(deviceID)[saveKey{item.LocalSave.RomID, item.LocalSave.FileName}]
+	localHash, _ := reportedHash(item.LocalSave, rec)
 
 	serverSaves, err := client.GetSaves(romm.SaveQuery{RomID: item.LocalSave.RomID, Slot: slot, DeviceID: deviceID})
 	if err != nil {
@@ -1312,7 +1370,7 @@ func resolveUploadConflict(client *romm.Client, deviceID string, item *SyncItem,
 		return uploadConflict
 	}
 
-	resolution, serverSave := resolveUpload409(serverSaves, slot, localHash, recordedHash)
+	resolution, serverSave := resolveUpload409(serverSaves, slot, localHash, rec.Content)
 	if serverSave != nil {
 		item.RemoteSave = serverSave
 	}
@@ -1382,7 +1440,7 @@ func upload(client *romm.Client, deviceID string, item *SyncItem) uploadOutcome 
 
 	// Record the synced state so the next scan reports this save under the same slot,
 	// with the hash the server computed for it.
-	localHash, _ := saveContentHash(item.LocalSave)
+	localHash, identity, _ := saveHashes(item.LocalSave)
 	hash, mismatch := uploadRecordHash(uploadedSave.ContentHash, localHash)
 	if mismatch {
 		logger.Warn("Server hash differs from local hash after upload",
@@ -1391,7 +1449,7 @@ func upload(client *romm.Client, deviceID string, item *SyncItem) uploadOutcome 
 		logger.Debug("Server sent no content hash after upload; recording the local hash",
 			"romID", item.LocalSave.RomID, "file", item.LocalSave.FileName)
 	}
-	recordSaveState(deviceID, item.LocalSave.RomID, item.LocalSave.FileName, query.Slot, uploadedSave.ID, hash)
+	recordSaveState(deviceID, item.LocalSave.RomID, item.LocalSave.FileName, query.Slot, uploadedSave.ID, hash, identity)
 
 	logger.Debug("Upload successful", "romID", item.LocalSave.RomID)
 	return uploadOK
@@ -1528,12 +1586,13 @@ func download(client *romm.Client, config *settings.Config, deviceID string, ite
 		recordSlot = *item.RemoteSave.Slot
 	}
 	recordFileName := recordedDownloadFileName(*item, savePath)
-	hash, _ := saveContentHash(LocalSave{
+	// The written file alone: its hash is both the content and the identity.
+	hash, identity, _ := saveHashes(LocalSave{
 		FilePath:        savePath,
 		IsDirectorySave: item.LocalSave.IsDirectorySave,
 		RelatedDirs:     item.LocalSave.RelatedDirs,
 	})
-	recordSaveState(deviceID, item.LocalSave.RomID, recordFileName, recordSlot, item.RemoteSave.ID, hash)
+	recordSaveState(deviceID, item.LocalSave.RomID, recordFileName, recordSlot, item.RemoteSave.ID, hash, identity)
 
 	logger.Debug("Download successful", "romID", item.LocalSave.RomID, "romName", item.LocalSave.RomName, "path", savePath, "recordedSlot", recordSlot)
 	return true

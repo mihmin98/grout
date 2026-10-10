@@ -838,7 +838,7 @@ func TestBuildClientSaveStates_FileSlotEmulatorHash(t *testing.T) {
 		EmulatorDir: "mgba",
 	}}
 
-	states := buildClientSaveStates(local, nil, nil)
+	states := buildClientSaveStates(local, nil, nil, nil)
 	if len(states) != 1 {
 		t.Fatalf("got %d states", len(states))
 	}
@@ -873,20 +873,20 @@ func TestBuildClientSaveStates_SlotPrecedence(t *testing.T) {
 
 	// 1. Recorded slot wins over the autosave default when there's no explicit preference.
 	recorded := map[saveKey]string{{romID: 7, fileName: "Mario.srm"}: "default"}
-	states := buildClientSaveStates(local, nil, recorded)
+	states := buildClientSaveStates(local, nil, recorded, nil)
 	if len(states) != 1 || states[0].Slot != "default" {
 		t.Fatalf("recorded slot should win: got %+v", states)
 	}
 
 	// 2. Explicit user preference wins over the recorded slot.
 	cfg := &settings.Config{SlotPreferences: map[string]string{"7": "quicksave"}}
-	states = buildClientSaveStates(local, cfg, recorded)
+	states = buildClientSaveStates(local, cfg, recorded, nil)
 	if len(states) != 1 || states[0].Slot != "quicksave" {
 		t.Fatalf("explicit preference should win over record: got %+v", states)
 	}
 
 	// 3. No preference and no record → autosave default.
-	states = buildClientSaveStates(local, nil, nil)
+	states = buildClientSaveStates(local, nil, nil, nil)
 	if len(states) != 1 || states[0].Slot != "autosave" {
 		t.Fatalf("default should be autosave: got %+v", states)
 	}
@@ -994,7 +994,7 @@ func TestBuildClientSaveStates_ExplicitAutosaveOverridesRecorded(t *testing.T) {
 	cfg := &settings.Config{}
 	cfg.SetSlotPreference(6, "autosave") // user explicitly picks autosave
 
-	states := buildClientSaveStates(local, cfg, recorded)
+	states := buildClientSaveStates(local, cfg, recorded, nil)
 	if len(states) != 1 || states[0].Slot != "autosave" {
 		t.Fatalf("explicit autosave must override recorded 'default': got %+v", states)
 	}
