@@ -125,3 +125,68 @@ func UnzipToDirectory(zipPath, targetDir string) error {
 
 	return nil
 }
+
+// ZipSaveUnit writes a flat zip of a multi-file save into a fresh temp folder,
+// named <stem of primary>.zip, entries named after the files on disk with the
+// primary first. Returns the zip path and a cleanup func that removes the folder.
+// The name matters: the upload sends the file under its own name, and Argosy
+// unpacks a <stem>.zip of <stem>.srm + <stem>.rtc.
+func ZipSaveUnit(primary string, companions []string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "grout-save-unit-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	base := filepath.Base(primary)
+	zipPath := filepath.Join(dir, strings.TrimSuffix(base, filepath.Ext(base))+".zip")
+	if err := writeFlatZip(zipPath, append([]string{primary}, companions...)); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return zipPath, cleanup, nil
+}
+
+// writeFlatZip writes the files into a new zip at zipPath, in order, each under
+// its base name with its modification time.
+func writeFlatZip(zipPath string, paths []string) error {
+	out, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	w := zip.NewWriter(out)
+	for _, p := range paths {
+		if err := addFileToZip(w, p); err != nil {
+			w.Close()
+			out.Close()
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func addFileToZip(w *zip.Writer, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	fw, err := w.CreateHeader(&zip.FileHeader{
+		Name:     filepath.Base(path),
+		Method:   zip.Deflate,
+		Modified: info.ModTime(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fw, f)
+	return err
+}

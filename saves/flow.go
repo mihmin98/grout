@@ -1417,6 +1417,15 @@ func upload(client *romm.Client, deviceID string, item *SyncItem) uploadOutcome 
 		}
 		defer os.Remove(zipPath)
 		uploadPath = zipPath
+	} else if len(item.LocalSave.Companions) > 0 {
+		// A save with companions (.srm + .rtc) goes up as one flat zip, as Argosy sends it.
+		zipPath, cleanup, zipErr := ZipSaveUnit(item.LocalSave.FilePath, item.LocalSave.Companions)
+		if zipErr != nil {
+			logger.Error("Failed to zip save with its companions", "path", item.LocalSave.FilePath, "error", zipErr)
+			return uploadErr
+		}
+		defer cleanup()
+		uploadPath = zipPath
 	}
 
 	uploadedSave, err := client.UploadSaveWithQuery(query, uploadPath)
