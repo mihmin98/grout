@@ -94,6 +94,12 @@ func compositeFromPairs(pairs map[string]string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
+// ComputeBytesMD5 returns the lowercase hex MD5 of data, the same value
+// ComputeMD5 gives for a file holding those bytes.
+func ComputeBytesMD5(data []byte) string {
+	return fmt.Sprintf("%x", md5.Sum(data))
+}
+
 // ComputeCompositeZipHash hashes a zip the way the RomM server does: md5 of each
 // non-directory entry, then md5 of the sorted "name:filehash" lines joined by "\n".
 func ComputeCompositeZipHash(zipPath string) (string, error) {
@@ -103,6 +109,12 @@ func ComputeCompositeZipHash(zipPath string) (string, error) {
 	}
 	defer r.Close()
 
+	return ComputeZipReaderHash(&r.Reader)
+}
+
+// ComputeZipReaderHash is ComputeCompositeZipHash for a zip that is already open,
+// such as one held in memory.
+func ComputeZipReaderHash(r *zip.Reader) (string, error) {
 	pairs := make(map[string]string, len(r.File))
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
@@ -119,6 +131,25 @@ func ComputeCompositeZipHash(zipPath string) (string, error) {
 		}
 		rc.Close()
 		pairs[f.Name] = fmt.Sprintf("%x", h.Sum(nil))
+	}
+	return compositeFromPairs(pairs), nil
+}
+
+// ComputeFilesCompositeHash hashes loose files the way the server hashes a flat
+// zip of them: each file's MD5 keyed by its base name, then compositeFromPairs.
+// Two paths with the same base name are an error, since a flat zip can't hold both.
+func ComputeFilesCompositeHash(paths []string) (string, error) {
+	pairs := make(map[string]string, len(paths))
+	for _, p := range paths {
+		name := filepath.Base(p)
+		if _, dup := pairs[name]; dup {
+			return "", fmt.Errorf("two files named %s", name)
+		}
+		h, err := ComputeMD5(p)
+		if err != nil {
+			return "", err
+		}
+		pairs[name] = h
 	}
 	return compositeFromPairs(pairs), nil
 }

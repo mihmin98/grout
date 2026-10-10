@@ -2,6 +2,7 @@ package hashing
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"os"
@@ -133,5 +134,148 @@ func TestDirHashMatchesZipHash(t *testing.T) {
 	}
 	if zipHash != dirHash {
 		t.Errorf("dir hash %s != zip hash %s", dirHash, zipHash)
+	}
+}
+
+// writeFiles creates each name -> content file in dir and returns the paths in
+// the order given by names.
+func writeFiles(t *testing.T, dir string, names []string, contents map[string]string) []string {
+	t.Helper()
+	paths := make([]string, 0, len(names))
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		if err := os.WriteFile(p, []byte(contents[n]), 0644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+// zipBytes builds a flat zip of the given entries in order, plus an optional
+// directory entry, and returns its bytes.
+func zipBytes(t *testing.T, names []string, contents map[string]string, dirEntry string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, n := range names {
+		fw, err := w.CreateHeader(&zip.FileHeader{Name: n, Method: zip.Deflate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write([]byte(contents[n])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dirEntry != "" {
+		if _, err := w.Create(dirEntry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestComputeBytesMD5_MatchesComputeMD5(t *testing.T) {
+	data := []byte("raw sram \x00\x01\x02")
+	p := filepath.Join(t.TempDir(), "Game.srm")
+	if err := os.WriteFile(p, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	fromDisk, err := ComputeMD5(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ComputeBytesMD5(data); got != fromDisk {
+		t.Errorf("ComputeBytesMD5 = %s, ComputeMD5 = %s", got, fromDisk)
+	}
+}
+
+func TestComputeZipReaderHash_MatchesComputeCompositeZipHash(t *testing.T) {
+	contents := map[string]string{"Crystal.srm": "sram", "Crystal.rtc": "clock"}
+	data := zipBytes(t, []string{"Crystal.srm", "Crystal.rtc"}, contents, "sub/")
+	zipPath := filepath.Join(t.TempDir(), "Crystal.zip")
+	if err := os.WriteFile(zipPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fromDisk, err := ComputeCompositeZipHash(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromMemory, err := ComputeZipReaderHash(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromMemory != fromDisk {
+		t.Errorf("in-memory hash %s != on-disk hash %s", fromMemory, fromDisk)
+	}
+	if want := refComposite(t, contents); fromDisk != want {
+		t.Errorf("zip hash %s, want %s", fromDisk, want)
+	}
+}
+
+func TestComputeFilesCompositeHash_MatchesServerFormula(t *testing.T) {
+	contents := map[string]string{"Crystal.srm": "save-ram-bytes", "Crystal.rtc": "clock-bytes"}
+	paths := writeFiles(t, t.TempDir(), []string{"Crystal.srm", "Crystal.rtc"}, contents)
+
+	got, err := ComputeFilesCompositeHash(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	md5hex := func(s string) string {
+		sum := md5.Sum([]byte(s))
+		return hex.EncodeToString(sum[:])
+	}
+	want := md5hex("Crystal.rtc:" + md5hex("clock-bytes") + "\nCrystal.srm:" + md5hex("save-ram-bytes"))
+	if got != want {
+		t.Errorf("ComputeFilesCompositeHash = %s, want %s", got, want)
+	}
+}
+
+func TestComputeFilesCompositeHash_EqualsZipOfSameFiles(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{"Crystal.srm", "Crystal.rtc"}
+	contents := map[string]string{"Crystal.srm": "save-ram-bytes", "Crystal.rtc": "clock-bytes"}
+	paths := writeFiles(t, dir, names, contents)
+
+	zipPath := filepath.Join(dir, "Crystal.zip")
+	if err := os.WriteFile(zipPath, zipBytes(t, names, contents, ""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	zipHash, err := ComputeCompositeZipHash(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesHash, err := ComputeFilesCompositeHash(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filesHash != zipHash {
+		t.Errorf("files hash %s != zip hash %s", filesHash, zipHash)
+	}
+}
+
+func TestComputeFilesCompositeHash_DuplicateBaseNameErrors(t *testing.T) {
+	root := t.TempDir()
+	var paths []string
+	for _, sub := range []string{"a", "b"} {
+		dir := filepath.Join(root, sub)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, writeFiles(t, dir, []string{"Crystal.srm"}, map[string]string{"Crystal.srm": sub})...)
+	}
+
+	if _, err := ComputeFilesCompositeHash(paths); err == nil {
+		t.Error("expected an error for two files with the same base name")
 	}
 }
