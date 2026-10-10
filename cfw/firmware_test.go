@@ -161,7 +161,7 @@ func TestFirmware_NilIsSafe(t *testing.T) {
 	if f.Gamelist() != GamelistNone {
 		t.Error("nil firmware should have no gamelist format")
 	}
-	if f.SavesBesideRoms() || f.KeepsRomExtInSaves() || f.IsBasedOnEmulationStation() {
+	if f.SavesBesideRoms() || f.KeepsRomExtInSaves() || f.PairsClockFiles() || f.IsBasedOnEmulationStation() {
 		t.Error("nil firmware should claim no capabilities")
 	}
 	if f.BIOSFilePaths("x", "psx") != nil {
@@ -320,6 +320,16 @@ func TestFirmwares_AssetNamesMatchReleaseWorkflow(t *testing.T) {
 			if !strings.Contains(published, name) {
 				t.Errorf("%s publishes %q, which release.yml never produces", c, name)
 			}
+		}
+	}
+}
+
+// Clock files are paired only on ROCKNIX: elsewhere saves can be named after the
+// whole ROM file (Game.gbc.srm), which Argosy would not match to its own.
+func TestPairsClockFiles_OnlyRocknix(t *testing.T) {
+	for c, f := range firmwares {
+		if got, want := f.PairsClockFiles(), c == ROCKNIX; got != want {
+			t.Errorf("%s: PairsClockFiles = %v, want %v", c, got, want)
 		}
 	}
 }

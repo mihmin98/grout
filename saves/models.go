@@ -13,6 +13,10 @@ type LocalSave struct {
 	IsDirectorySave bool     // True for platforms like PSP where saves are directories
 	GameID          string   // PSP: game ID prefix (e.g. "UCUS98751")
 	RelatedDirs     []string // PSP: full paths of all save directories for this game
+	// Companions are files that belong to this save besides FilePath and travel
+	// with it, e.g. RetroArch's <stem>.rtc clock file next to <stem>.srm. Empty
+	// for single-file saves.
+	Companions []string
 }
 
 type SyncAction int

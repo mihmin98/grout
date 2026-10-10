@@ -98,6 +98,9 @@ type Firmware struct {
 	// stripping the extension as RetroArch does. Fallback only, when the
 	// convention cannot be read off saves already on the device (issue #245).
 	keepsRomExtInSaves bool
+	// pairsClockFiles syncs a RetroArch <stem>.rtc together with its <stem>.srm.
+	// Only where saves are named after the bare ROM stem, as Argosy expects.
+	pairsClockFiles bool
 	// saveNaming, when set, is how the firmware's emulator names a save, read
 	// from its own settings: whether the rom's extension stays and the save's
 	// extension. It overrides inferring the style from saves on the card.
@@ -109,6 +112,9 @@ func (f *Firmware) IsBasedOnEmulationStation() bool {
 }
 
 func (f *Firmware) KeepsRomExtInSaves() bool { return f != nil && f.keepsRomExtInSaves }
+
+// PairsClockFiles reports whether a save's <stem>.rtc clock file is synced with it.
+func (f *Firmware) PairsClockFiles() bool { return f != nil && f.pairsClockFiles }
 
 // SaveNaming reports how the firmware names saves, when it says so itself.
 func (f *Firmware) SaveNaming() (keepRomExt bool, ext string, ok bool) {
@@ -409,6 +415,7 @@ var firmwares = map[CFW]*Firmware{
 		groutGamelist:         rocknix.GetGroutGamelist,
 		platforms:             rocknix.Platforms,
 		savesBesideRoms:       true,
+		pairsClockFiles:       true,
 		gamelist:              GamelistEmulationStation,
 		groutLauncherPath:     "./Grout.sh",
 		emulationStationBased: true,
