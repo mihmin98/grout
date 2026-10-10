@@ -1768,7 +1768,7 @@ func backupFile(path string, config *settings.Config) error {
 	name := filepath.Base(path)
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
-	timestamp := info.ModTime().Format("2006-01-02 15-04-05")
+	timestamp := info.ModTime().Format(backupTimeFormat)
 	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s [%s]%s", base, timestamp, ext))
 
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
@@ -1780,7 +1780,7 @@ func backupFile(path string, config *settings.Config) error {
 
 	gaba.GetLogger().Debug("Backed up save before download", "backup", backupPath)
 	if config != nil && config.SaveBackupLimit > 0 {
-		cleanupBackups(backupDir, base, config.SaveBackupLimit)
+		cleanupBackups(backupDir, base, ext, config.SaveBackupLimit)
 	}
 	return nil
 }
@@ -1799,7 +1799,7 @@ func backupDirectorySave(ls LocalSave, config *settings.Config) error {
 	backupDir := filepath.Join(filepath.Dir(ls.FilePath), ".backup")
 	ext := filepath.Ext(ls.FileName)
 	base := strings.TrimSuffix(ls.FileName, ext)
-	timestamp := info.ModTime().Format("2006-01-02 15-04-05")
+	timestamp := info.ModTime().Format(backupTimeFormat)
 	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s [%s]%s", base, timestamp, ext))
 
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
@@ -1821,12 +1821,33 @@ func backupDirectorySave(ls LocalSave, config *settings.Config) error {
 
 	gaba.GetLogger().Debug("Backed up save before download", "backup", backupPath)
 	if config != nil && config.SaveBackupLimit > 0 {
-		cleanupBackups(backupDir, base, config.SaveBackupLimit)
+		cleanupBackups(backupDir, base, ext, config.SaveBackupLimit)
 	}
 	return nil
 }
 
-func cleanupBackups(backupDir string, baseName string, limit int) {
+// backupTimeFormat is the timestamp in a backup's name, "<base> [<time>]<ext>".
+const backupTimeFormat = "2006-01-02 15-04-05"
+
+// isBackupOf reports whether name is a backup of the file <baseName><ext>, as
+// named by backupFile: "<baseName> [<time>]<ext>", the extension in any case.
+func isBackupOf(name, baseName, ext string) bool {
+	rest, ok := strings.CutPrefix(name, baseName+" [")
+	if !ok || len(rest) < len(ext) || !strings.EqualFold(rest[len(rest)-len(ext):], ext) {
+		return false
+	}
+	stamp, ok := strings.CutSuffix(rest[:len(rest)-len(ext)], "]")
+	if !ok {
+		return false
+	}
+	_, err := time.Parse(backupTimeFormat, stamp)
+	return err == nil
+}
+
+// cleanupBackups keeps the newest limit backups of the file <baseName><ext> in
+// backupDir. Each extension has its own limit, so a save's clock file backups
+// don't push out its save backups.
+func cleanupBackups(backupDir, baseName, ext string, limit int) {
 	if limit <= 0 {
 		return
 	}
@@ -1837,14 +1858,14 @@ func cleanupBackups(backupDir string, baseName string, limit int) {
 		return
 	}
 
-	// Collect backup files for this game (matching base name prefix)
+	// Collect the backups of this file
 	type backupFile struct {
 		name    string
 		modTime int64
 	}
 	var backups []backupFile
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), baseName+" [") {
+		if e.IsDir() || !isBackupOf(e.Name(), baseName, ext) {
 			continue
 		}
 		info, err := e.Info()

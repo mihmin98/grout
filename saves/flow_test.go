@@ -1103,3 +1103,90 @@ func TestScanFileSaves_UnchangedForSav(t *testing.T) {
 		t.Errorf("save = %+v", s)
 	}
 }
+
+// --- cleanupBackups tests ---
+
+// makeBackups writes n backups of <base><ext> into dir, oldest first, an hour
+// apart, and returns their names in that order.
+func makeBackups(t *testing.T, dir, base, ext string, n int) []string {
+	t.Helper()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var names []string
+	for i := range n {
+		at := start.Add(time.Duration(i) * time.Hour)
+		name := fmt.Sprintf("%s [%s]%s", base, at.Format(backupTimeFormat), ext)
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestCleanupBackups_PerExtension(t *testing.T) {
+	dir := t.TempDir()
+	srm := makeBackups(t, dir, "Crystal", ".srm", 6)
+	rtc := makeBackups(t, dir, "Crystal", ".rtc", 6)
+
+	cleanupBackups(dir, "Crystal", ".srm", 5)
+	cleanupBackups(dir, "Crystal", ".rtc", 5)
+
+	want := append(slices.Clone(srm[1:]), rtc[1:]...)
+	slices.Sort(want)
+	if got := dirNames(t, dir); !slices.Equal(got, want) {
+		t.Errorf("left %v, want the 5 newest of each type %v", got, want)
+	}
+}
+
+func TestCleanupBackups_OtherGamesUntouched(t *testing.T) {
+	dir := t.TempDir()
+	crystal := makeBackups(t, dir, "Crystal", ".srm", 3)
+	beta := makeBackups(t, dir, "Crystal [Beta]", ".srm", 3)
+	gold := makeBackups(t, dir, "Gold", ".srm", 3)
+
+	cleanupBackups(dir, "Crystal", ".srm", 1)
+
+	want := append(append([]string{crystal[2]}, beta...), gold...)
+	slices.Sort(want)
+	if got := dirNames(t, dir); !slices.Equal(got, want) {
+		t.Errorf("left %v, want %v", got, want)
+	}
+}
+
+func TestIsBackupOf(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Crystal [2026-01-01 10-00-00].srm", true},
+		{"Crystal [2026-01-01 10-00-00].SRM", true},
+		{"Crystal [2026-01-01 10-00-00].rtc", false},
+		{"Crystal [Beta] [2026-01-01 10-00-00].srm", false},
+		{"Crystal2 [2026-01-01 10-00-00].srm", false},
+		{"Crystal [not a time].srm", false},
+		{"Crystal.srm", false},
+	}
+	for _, tt := range tests {
+		if got := isBackupOf(tt.name, "Crystal", ".srm"); got != tt.want {
+			t.Errorf("isBackupOf(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
