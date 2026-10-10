@@ -1042,3 +1042,64 @@ func TestDownloadSaveName_MinUIAlwaysSav(t *testing.T) {
 		t.Errorf("minui: %q, want Game (USA).gba.sav", name)
 	}
 }
+
+// --- scanFileSaves tests ---
+
+// scanFolder writes the named files into a temp folder and scans it with a lookup
+// that knows only the ROM "Crystal".
+func scanFolder(t *testing.T, pairClocks bool, names ...string) (string, []LocalSave) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(fsSlug, key string) (romm.Rom, error) {
+		if fsSlug == "gbc" && key == "Crystal" {
+			return romm.Rom{ID: 6, Name: "Pokemon Crystal"}, nil
+		}
+		return romm.Rom{}, fmt.Errorf("no rom for %s", key)
+	}
+	return dir, scanFileSaves(entries, dir, dir, "gbc", lookup, pairClocks)
+}
+
+func TestScanFileSaves_PairsClockOnRocknix(t *testing.T) {
+	dir, saves := scanFolder(t, true, "Crystal.srm", "Crystal.rtc", "Crystal.7z")
+	if len(saves) != 1 {
+		t.Fatalf("saves = %+v, want one", saves)
+	}
+	if want := []string{filepath.Join(dir, "Crystal.rtc")}; !slices.Equal(saves[0].Companions, want) {
+		t.Errorf("companions = %v, want %v", saves[0].Companions, want)
+	}
+	if saves[0].FileName != "Crystal.srm" || saves[0].RomID != 6 {
+		t.Errorf("save = %+v", saves[0])
+	}
+
+	_, saves = scanFolder(t, false, "Crystal.srm", "Crystal.rtc", "Crystal.7z")
+	if len(saves) != 1 || saves[0].Companions != nil {
+		t.Errorf("without clock pairing: saves = %+v, want one with no companions", saves)
+	}
+}
+
+// W10: a clock file with no save beside it is not a save.
+func TestScanFileSaves_LoneRtcIgnored(t *testing.T) {
+	if _, saves := scanFolder(t, true, "Crystal.rtc", "Crystal.7z"); len(saves) != 0 {
+		t.Errorf("saves = %+v, want none", saves)
+	}
+}
+
+func TestScanFileSaves_UnchangedForSav(t *testing.T) {
+	dir, saves := scanFolder(t, true, "Crystal.sav", "Crystal.rtc", "Crystal.7z")
+	if len(saves) != 1 {
+		t.Fatalf("saves = %+v, want one", saves)
+	}
+	s := saves[0]
+	if s.FilePath != filepath.Join(dir, "Crystal.sav") || s.FSSlug != "gbc" || s.EmulatorDir != dir || s.Companions != nil {
+		t.Errorf("save = %+v", s)
+	}
+}

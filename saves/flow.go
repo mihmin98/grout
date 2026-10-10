@@ -871,54 +871,82 @@ func ScanSaves(config *settings.Config) []LocalSave {
 					})
 				}
 			} else {
-				// File-based saves: scan for individual save files
-				saveFileCount := 0
-				for _, entry := range entries {
-					if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-						continue
-					}
-
-					ext := strings.ToLower(filepath.Ext(entry.Name()))
-					if !ValidSaveExtensions[ext] {
-						continue
-					}
-
-					saveFileCount++
-					nameNoExt := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-
-					var rom romm.Rom
-					var matched bool
-					for _, key := range saveLookupKeys(nameNoExt) {
-						if r, err := cm.GetRomByFSLookup(rommFSSlug, key); err == nil {
-							rom, matched = r, true
-							break
-						}
-					}
-					if !matched {
-						logger.Debug("No cache match for save file", "file", entry.Name(), "fsSlug", rommFSSlug, "nameNoExt", nameNoExt)
-						continue
-					}
-
-					logger.Debug("Matched save to ROM", "file", entry.Name(), "romID", rom.ID, "romName", rom.Name)
-
-					saves = append(saves, LocalSave{
-						RomID:       rom.ID,
-						RomName:     rom.Name,
-						FSSlug:      rommFSSlug,
-						FileName:    entry.Name(),
-						FilePath:    filepath.Join(saveDir, entry.Name()),
-						EmulatorDir: emuDir,
-					})
-				}
-
-				if saveFileCount > 0 {
-					logger.Debug("Scanned emulator directory", "path", saveDir, "saveFiles", saveFileCount)
-				}
+				saves = append(saves, scanFileSaves(entries, saveDir, emuDir, rommFSSlug,
+					cm.GetRomByFSLookup, cfw.ActiveFirmware().PairsClockFiles())...)
 			}
 		}
 	}
 
 	logger.Debug("Completed save scan", "matched", len(saves))
+	return saves
+}
+
+// scanFileSaves matches the save files in one folder to ROMs. lookup resolves a
+// save's name key to a ROM (cm.GetRomByFSLookup on the device). With pairClocks,
+// each matched save carries the folder's files that belong with it (Companions).
+func scanFileSaves(entries []os.DirEntry, saveDir, emuDir, fsSlug string,
+	lookup func(fsSlug, key string) (romm.Rom, error), pairClocks bool) []LocalSave {
+	logger := gaba.GetLogger()
+
+	var names []string
+	if pairClocks {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				names = append(names, entry.Name())
+			}
+		}
+	}
+
+	var saves []LocalSave
+	saveFileCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if !ValidSaveExtensions[ext] {
+			continue
+		}
+
+		saveFileCount++
+		nameNoExt := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+
+		var rom romm.Rom
+		var matched bool
+		for _, key := range saveLookupKeys(nameNoExt) {
+			if r, err := lookup(fsSlug, key); err == nil {
+				rom, matched = r, true
+				break
+			}
+		}
+		if !matched {
+			logger.Debug("No cache match for save file", "file", entry.Name(), "fsSlug", fsSlug, "nameNoExt", nameNoExt)
+			continue
+		}
+
+		path := filepath.Join(saveDir, entry.Name())
+		var companions []string
+		if pairClocks {
+			companions = findCompanions(path, names)
+		}
+
+		logger.Debug("Matched save to ROM", "file", entry.Name(), "romID", rom.ID, "romName", rom.Name, "companions", len(companions))
+
+		saves = append(saves, LocalSave{
+			RomID:       rom.ID,
+			RomName:     rom.Name,
+			FSSlug:      fsSlug,
+			FileName:    entry.Name(),
+			FilePath:    path,
+			EmulatorDir: emuDir,
+			Companions:  companions,
+		})
+	}
+
+	if saveFileCount > 0 {
+		logger.Debug("Scanned emulator directory", "path", saveDir, "saveFiles", saveFileCount)
+	}
 	return saves
 }
 
