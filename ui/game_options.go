@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"grout/catalog"
 	"grout/romm"
 	"grout/saves"
 	"grout/settings"
@@ -60,14 +61,8 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 
 	oldSlotPref := config.GetSlotPreference(input.Game.ID)
 
-	items := s.buildMenuItems(config, input.Game, input.Host.DeviceID != "", slotNames)
-
-	showQRText := localize("game_options_show_qr", "Show QR Code")
-	items = append(items, gaba.ItemWithOptions{
-		Item:           gaba.MenuItem{Text: showQRText},
-		Options:        []gaba.Option{{DisplayName: "", Value: "show_qr", Type: gaba.OptionTypeClickable}},
-		SelectedOption: 0,
-	})
+	hasLocalCopy := catalog.HasLocalCopy(*config, input.Game)
+	items := s.buildMenuItems(config, input.Game, input.Host.DeviceID != "", slotNames, hasLocalCopy)
 
 	title := localize("game_options_title", "Game Options")
 
@@ -92,9 +87,12 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 
 	if result.Action == gaba.ListActionSelected {
 		if result.Selected >= 0 && result.Selected < len(result.Items) {
-			selectedItem := result.Items[result.Selected]
-			if selectedItem.Item.Text == showQRText {
+			switch clickedValue(result.Items[result.Selected]) {
+			case "show_qr":
 				output.Action = GameOptionsActionShowQR
+				return output, nil
+			case "delete":
+				output.Action = GameOptionsActionDelete
 				return output, nil
 			}
 		}
@@ -127,7 +125,9 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 	return output, nil
 }
 
-func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Rom, deviceRegistered bool, slotNames []string) []gaba.ItemWithOptions {
+// buildMenuItems lists the panel's rows. Delete from Device is offered only
+// when the game has files on the device to remove.
+func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Rom, deviceRegistered bool, slotNames []string, hasLocalCopy bool) []gaba.ItemWithOptions {
 	items := make([]gaba.ItemWithOptions, 0)
 
 	if deviceRegistered {
@@ -141,7 +141,33 @@ func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Ro
 		})
 	}
 
+	items = append(items, clickableItem(localize("game_options_show_qr", "Show QR Code"), "show_qr"))
+	if hasLocalCopy {
+		items = append(items, clickableItem(localize("game_options_delete", "Delete from Device"), "delete"))
+	}
+
 	return items
+}
+
+func clickableItem(text, value string) gaba.ItemWithOptions {
+	return gaba.ItemWithOptions{
+		Item:           gaba.MenuItem{Text: text},
+		Options:        []gaba.Option{{DisplayName: "", Value: value, Type: gaba.OptionTypeClickable}},
+		SelectedOption: 0,
+	}
+}
+
+// clickedValue is the value of a clickable row, or "" for any other row.
+func clickedValue(item gaba.ItemWithOptions) string {
+	if item.SelectedOption < 0 || item.SelectedOption >= len(item.Options) {
+		return ""
+	}
+	option := item.Options[item.SelectedOption]
+	if option.Type != gaba.OptionTypeClickable {
+		return ""
+	}
+	value, _ := option.Value.(string)
+	return value
 }
 
 func (s *GameOptionsScreen) applySettings(config *settings.Config, game romm.Rom, items []gaba.ItemWithOptions) {

@@ -46,6 +46,8 @@ func buildTransitionFunc(state *AppState, quitOnBack bool, initialShowCollection
 			return transitionGameOptions(ctx, result)
 		case ScreenGameQR:
 			return popOrExit(stack)
+		case ScreenDeleteGame:
+			return transitionDeleteGame(ctx, result)
 		case ScreenCollectionList:
 			return transitionCollectionList(ctx, result)
 		case ScreenCollectionPlatformSelection:
@@ -523,6 +525,20 @@ func transitionGameOptions(ctx *transitionContext, result any) (router.Screen, a
 		}
 	}
 
+	if r.Action == ui.GameOptionsActionDelete {
+		ctx.stack.Push(ScreenGameOptions, ui.GameOptionsInput{
+			Config:      ctx.state.Config,
+			Host:        r.Host,
+			Game:        r.Game,
+			SlotNames:   r.SlotNames,
+			SlotsLoaded: r.SlotsLoaded,
+		}, nil)
+		return ScreenDeleteGame, ui.DeleteGameInput{
+			Config: ctx.state.Config,
+			Game:   r.Game,
+		}
+	}
+
 	if r.Action == ui.GameOptionsActionSyncNow {
 		ctx.stack.Push(ScreenGameOptions, ui.GameOptionsInput{
 			Config: ctx.state.Config,
@@ -540,6 +556,17 @@ func transitionGameOptions(ctx *transitionContext, result any) (router.Screen, a
 		return ScreenSaveSync, syncInput
 	}
 
+	return popOrExit(ctx.stack)
+}
+
+// transitionDeleteGame goes back to Game Options when the user cancels. After
+// a deletion Game Options has nothing left to offer for the game, so it goes
+// back to Game Details, which works out its download label afresh.
+func transitionDeleteGame(ctx *transitionContext, result any) (router.Screen, any) {
+	r := result.(ui.DeleteGameOutput)
+	if r.Action == ui.DeleteGameActionDone {
+		ctx.stack.Pop() // Game Options
+	}
 	return popOrExit(ctx.stack)
 }
 

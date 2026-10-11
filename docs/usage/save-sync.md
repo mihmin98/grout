@@ -240,6 +240,11 @@ saves:
 - Disable autoload for save states
 - Delete the save state after downloading a synced save
 
+### Deleted games
+
+**Delete from Device** in Game Options keeps a game's saves. They keep uploading as before, but the game's saves on
+the server are no longer downloaded until the game is back on the device.
+
 ### User-specific
 
 Saves are tied to your RomM user account. If you share your RomM account with others, your saves will also be shared.

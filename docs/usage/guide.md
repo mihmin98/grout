@@ -343,6 +343,13 @@ patches and DLC, sorted by the folder they sit in, and those are not offered as 
   registered). You can select an existing slot or create a new one with **New Slot...**. Changing the slot triggers
   a sync automatically. See [Save Slots](save-sync.md#save-slots) for details.
 - **Show QR Code** - Display a QR code that links to this game's page on your RomM web interface.
+- **Delete from Device** - Remove a downloaded game from this device. Appears only when the game has files on the
+  device. Press `X` to confirm or `B` to cancel. Grout removes the game's ROM files (every downloaded version, and a
+  multi-disc game's discs and playlist), the artwork it downloaded and the game's entry in the firmware's game list.
+  **Saves and save states are never deleted**, and a folder is only removed once it is empty, so saves sitting next to
+  a multi-disc game's discs stay where they are. For games downloaded with an older version of Grout, which did not
+  keep a record of the files it wrote, Grout works out the files from the game's layout and the current art settings,
+  so some files may be left behind.
 
 > [!IMPORTANT]
 > **Kid Mode Impact:** When Kid Mode is enabled, the Game Options screen is hidden.

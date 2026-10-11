@@ -39,6 +39,14 @@ const (
 	GameOptionsActionShowQR
 	GameOptionsActionBack
 	GameOptionsActionSyncNow
+	GameOptionsActionDelete
+)
+
+type DeleteGameAction int
+
+const (
+	DeleteGameActionCancel DeleteGameAction = iota
+	DeleteGameActionDone
 )
 
 type SearchAction int
