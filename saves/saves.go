@@ -1,5 +1,10 @@
 package saves
 
+import (
+	"path/filepath"
+	"strings"
+)
+
 // ValidSaveExtensions contains file extensions recognized as save files across
 // emulators commonly found on supported CFWs (RetroArch cores and standalone).
 // This is needed since some CFWs keep the saves alongside the ROMs.
@@ -26,4 +31,53 @@ var ValidSaveExtensions = map[string]bool{
 
 	// Arcade / MAME / FBNeo
 	".nv": true, // NVRAM
+}
+
+// keptBesideRomExtensions are files an emulator writes beside its saves that
+// are not in ValidSaveExtensions but must survive as if they were saves, such
+// as the clock that goes with a .srm.
+var keptBesideRomExtensions = map[string]bool{
+	".rtc":  true,
+	".ldci": true,
+}
+
+// IsSaveLike reports whether a path names something a player made rather than
+// something a download wrote: a save, its clock, a save state or its
+// thumbnail, or anything in a save backup folder. Deleting a game keeps these
+// even when its record lists them.
+func IsSaveLike(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".backup" {
+			return true
+		}
+	}
+
+	name := filepath.Base(path)
+	ext := strings.ToLower(filepath.Ext(name))
+	if ValidSaveExtensions[ext] || keptBesideRomExtensions[ext] {
+		return true
+	}
+
+	// RetroArch states: Game.state, Game.state3, Game.state.auto, Game.state1.png.
+	segments := strings.Split(strings.ToLower(name), ".")
+	for _, segment := range segments[1:] {
+		if isStateSegment(segment) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStateSegment matches "state" alone or followed by a slot number.
+func isStateSegment(segment string) bool {
+	slot, ok := strings.CutPrefix(segment, "state")
+	if !ok {
+		return false
+	}
+	for _, r := range slot {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

@@ -2,6 +2,7 @@ package download
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -312,5 +313,44 @@ func TestBuildPlan_DefaultSkipsNonGameFiles(t *testing.T) {
 	plan, _ := BuildPlan(settings.Config{}, testHost(), testPlatform(), []romm.Rom{game}, 0)
 	if len(plan.Roms) != 1 || !strings.HasSuffix(plan.Roms[0].Location, "Test Game (USA).nds") {
 		t.Fatalf("roms = %+v, want the game, not the manual", plan.Roms)
+	}
+}
+
+// A delete without a record looks for art where a download would have put it,
+// so the two must agree for every kind RomM has.
+func TestArtLocations_MatchThePlan(t *testing.T) {
+	game := romm.Rom{
+		ID: 42, Name: "Test Game", FsName: "test.nds", FsNameNoExt: "test",
+		PathCoverLarge: "/covers/test.png",
+		HasManual:      true, PathManual: "/manuals/test.pdf",
+		Files: []romm.RomFile{{ID: 100, FileName: "test.nds"}},
+	}
+	game.ScreenScraperMetadata.VideoPath = "/videos/test.mp4"
+
+	config := settings.Config{DownloadArt: true, ArtKind: library.ArtKindDefault}
+	config.AdditionalDownloads.Video = true
+	config.AdditionalDownloads.Manual = true
+	plan, _ := BuildPlan(config, testHost(), testPlatform(), []romm.Rom{game}, 0)
+	if len(plan.Art) != 3 {
+		t.Fatalf("planned %d art items, want cover, video and manual", len(plan.Art))
+	}
+
+	locations := ArtLocations(config, game, testPlatform())
+	for _, item := range plan.Art {
+		if !slices.Contains(locations, item.Location) {
+			t.Errorf("ArtLocations = %v, missing planned %q", locations, item.Location)
+		}
+	}
+}
+
+func TestArtLocations_NoneWithoutArt(t *testing.T) {
+	game := romm.Rom{ID: 42, FsNameNoExt: "test", PathCoverLarge: "/covers/test.png"}
+	if got := ArtLocations(settings.Config{}, game, testPlatform()); got != nil {
+		t.Errorf("art downloads off: ArtLocations = %v, want none", got)
+	}
+
+	game.PathCoverLarge = ""
+	if got := ArtLocations(settings.Config{DownloadArt: true}, game, testPlatform()); got != nil {
+		t.Errorf("no cover on the server: ArtLocations = %v, want none", got)
 	}
 }

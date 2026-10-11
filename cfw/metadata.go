@@ -29,6 +29,14 @@ func scheduleESRestart() {
 	file.Close()
 }
 
+// RefreshFrontend asks the frontend to reload its game lists, on firmwares
+// whose frontend keeps them, so files removed from the card stop showing.
+func RefreshFrontend() {
+	if ActiveFirmware().Gamelist() == GamelistEmulationStation {
+		scheduleESRestart()
+	}
+}
+
 // AddGroutToGamelist adds grout's launcher entry to the frontend's game list.
 // Only the EmulationStation family has somewhere to put it.
 func AddGroutToGamelist(c CFW) {

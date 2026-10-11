@@ -5,6 +5,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"grout/gamelist"
+	"grout/library"
+	"grout/settings"
 )
 
 // A conformance table over every firmware stops a new one silently returning ""
@@ -160,4 +164,46 @@ func TestArtDirectory_EachFirmwareAnswersForItself(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A delete refuses paths outside these folders, so every place a download
+// writes to has to be among them.
+func TestManagedDirectories(t *testing.T) {
+	t.Setenv("BASE_PATH", t.TempDir())
+	config := settings.Config{}
+
+	t.Run("ROCKNIX", func(t *testing.T) {
+		t.Setenv(EnvVar, string(ROCKNIX))
+		romDir := PlatformRomDirectory(config, testFSSlug)
+		got := ManagedDirectories(config, testFSSlug, testPlatform)
+		for _, want := range []string{
+			romDir,
+			filepath.Join(romDir, "images"),
+			filepath.Join(romDir, "videos"),
+			filepath.Join(romDir, "manuals"),
+			filepath.Join(romDir, "bezels"),
+		} {
+			if !slices.Contains(got, want) {
+				t.Errorf("ManagedDirectories = %v, missing %s", got, want)
+			}
+		}
+		if len(got) != 5 {
+			t.Errorf("ManagedDirectories = %v, want each folder once", got)
+		}
+	})
+
+	t.Run("muOS", func(t *testing.T) {
+		t.Setenv(EnvVar, string(MuOS))
+		got := ManagedDirectories(config, testFSSlug, testPlatform)
+		want := MetadataLocationFor(gamelist.RomGameEntry{
+			Game:     library.Game{Path: "/x", BaseName: "Game"},
+			Platform: library.Platform{FSSlug: testFSSlug, Name: testPlatform},
+		}).File
+		if !slices.Contains(got, filepath.Dir(want)) {
+			t.Errorf("ManagedDirectories = %v, missing the text folder %s", got, filepath.Dir(want))
+		}
+		if !slices.Contains(got, PlatformRomDirectory(config, testFSSlug)) {
+			t.Errorf("ManagedDirectories = %v, missing the rom folder", got)
+		}
+	})
 }

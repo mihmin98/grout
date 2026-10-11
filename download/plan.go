@@ -304,7 +304,38 @@ func romItem(config settings.Config, host settings.Host, game romm.Rom, romDirec
 func artItems(config settings.Config, host settings.Host, game romm.Rom, platform romm.Platform,
 	activeCFW cfw.CFW, isESBased bool, paths *library.ArtPaths) []Item {
 
-	items := make([]Item, 0, len(artSpecs))
+	targets := artTargets(config, game, platform, activeCFW)
+	items := make([]Item, 0, len(targets))
+
+	for _, target := range targets {
+		source := target.spec.sourceURL(game, config, host)
+		if source == "" {
+			continue
+		}
+
+		target.spec.record(paths, target.location, isESBased)
+		items = append(items, Item{
+			URL:      source,
+			Location: target.location,
+			GameName: game.Name,
+			RomID:    game.ID,
+			IsImage:  target.spec.fixedExt == "",
+		})
+	}
+
+	return items
+}
+
+// artTarget is one kind of artwork the settings ask for, and where it goes.
+type artTarget struct {
+	spec     artSpec
+	location string
+}
+
+// artTargets lists where each kind of artwork the settings ask for would be
+// written on this firmware, whether or not RomM has it for the game.
+func artTargets(config settings.Config, game romm.Rom, platform romm.Platform, activeCFW cfw.CFW) []artTarget {
+	targets := make([]artTarget, 0, len(artSpecs))
 
 	for _, spec := range artSpecs {
 		if !spec.wanted(config) {
@@ -314,28 +345,32 @@ func artItems(config settings.Config, host settings.Host, game romm.Rom, platfor
 		if dir == "" {
 			continue
 		}
-		source := spec.sourceURL(game, config, host)
-		if source == "" {
-			continue
-		}
 
 		name := cfw.ArtFileName(activeCFW, spec.slot, romArtFileName(game), game.FsNameNoExt)
 		if spec.fixedExt != "" {
 			name = game.FsNameNoExt + spec.fixedExt
 		}
 
-		location := filepath.Join(dir, name)
-		spec.record(paths, location, isESBased)
-		items = append(items, Item{
-			URL:      source,
-			Location: location,
-			GameName: game.Name,
-			RomID:    game.ID,
-			IsImage:  spec.fixedExt == "",
-		})
+		targets = append(targets, artTarget{spec: spec, location: filepath.Join(dir, name)})
 	}
 
-	return items
+	return targets
+}
+
+// ArtLocations lists where a download under the current settings would put a
+// game's art and media, without asking RomM which of them it has. Deleting a
+// game downloaded before downloads were recorded looks for its art here.
+func ArtLocations(config settings.Config, game romm.Rom, platform romm.Platform) []string {
+	if !config.DownloadArt || !hasCoverArt(game) {
+		return nil
+	}
+
+	targets := artTargets(config, game, platform, cfw.GetCFW())
+	locations := make([]string, 0, len(targets))
+	for _, target := range targets {
+		locations = append(locations, target.location)
+	}
+	return locations
 }
 
 // romArtFileName is the rom's file name for artwork naming, or "" when the game
