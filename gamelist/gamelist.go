@@ -198,3 +198,42 @@ func (gl *GameList) AddOrUpdateRomEntry(fileName string, info map[string]string)
 	}
 	return gl.upsert(byFileName(fileName), info)
 }
+
+// RemoveRomEntry removes every entry whose <path> names entryPath. A relative
+// <path> ("./Game.gba", as EmulationStation writes it) is resolved against
+// listDir. Returns how many entries were removed.
+//
+// It compares whole cleaned paths, not base names as byFileName does:
+// ./Game.m3u and ./Game/Game.m3u are different games.
+func (gl *GameList) RemoveRomEntry(listDir, entryPath string) int {
+	root := gl.root()
+	target := resolveEntryPath(listDir, entryPath)
+	if root == nil || target == "" {
+		return 0
+	}
+
+	removed := 0
+	for _, game := range root.SelectElements(GameElement) {
+		pathElement := game.FindElement(PathElement)
+		if pathElement == nil {
+			continue
+		}
+		if resolveEntryPath(listDir, strings.TrimSpace(pathElement.Text())) == target {
+			root.RemoveChild(game)
+			removed++
+		}
+	}
+	return removed
+}
+
+// resolveEntryPath makes an entry's <path> absolute and clean, or "" when it
+// is empty.
+func resolveEntryPath(listDir, path string) string {
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(listDir, path)
+	}
+	return filepath.Clean(path)
+}

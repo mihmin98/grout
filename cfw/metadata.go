@@ -1,9 +1,13 @@
 package cfw
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"grout/cfw/muos"
 	"grout/gamelist"
@@ -101,4 +105,98 @@ func gamelistLocation(entry gamelist.RomGameEntry, name gamelist.FileName) Metad
 		File:  filepath.Join(entry.RomDirectory, string(name)),
 		Entry: entry.Game.Path,
 	}
+}
+
+// RemoveGamesMetadata takes out what FillGamesMetadata wrote at these
+// locations on the active firmware, and returns how many entries and files
+// went. Already gone counts as done, not as an error.
+//
+// It touches only the firmware's own kind of metadata: an entry is removed
+// only from a file named as the firmware's gamelist, and a text file only from
+// muOS's catalogue text folders. A location that fails these is an error.
+func RemoveGamesMetadata(locations []MetadataLocation) (int, error) {
+	switch format := ActiveFirmware().Gamelist(); format {
+	case GamelistEmulationStation:
+		removed, err := removeGamelistEntries(locations, gamelist.GameListFileName)
+		if removed > 0 {
+			scheduleESRestart()
+		}
+		return removed, err
+
+	case GamelistMiyoo:
+		return removeGamelistEntries(locations, gamelist.MiyooGameListFileName)
+
+	case GamelistMuOSText:
+		return removeMuOSTexts(locations, filepath.Join(muos.GetInfoDirectory(), "catalogue"))
+	}
+	return 0, nil
+}
+
+// removeGamelistEntries removes the entries of locations that name a gamelist,
+// editing each file once.
+func removeGamelistEntries(locations []MetadataLocation, name gamelist.FileName) (int, error) {
+	var errs []error
+	var listFiles []string
+	entries := make(map[string][]string)
+	for _, loc := range locations {
+		if loc.File == "" || loc.Entry == "" {
+			continue
+		}
+		if filepath.Base(loc.File) != string(name) {
+			errs = append(errs, fmt.Errorf("%s is not a %s", loc.File, name))
+			continue
+		}
+		if _, seen := entries[loc.File]; !seen {
+			listFiles = append(listFiles, loc.File)
+		}
+		entries[loc.File] = append(entries[loc.File], loc.Entry)
+	}
+
+	removed := 0
+	for _, listFile := range listFiles {
+		n, err := gamelist.RemoveRomEntries(listFile, entries[listFile])
+		if err != nil {
+			errs = append(errs, err)
+		}
+		removed += n
+	}
+	return removed, errors.Join(errs...)
+}
+
+// removeMuOSTexts removes the description texts of locations that name a file
+// of the game's own.
+func removeMuOSTexts(locations []MetadataLocation, catalogue string) (int, error) {
+	var errs []error
+	removed := 0
+	for _, loc := range locations {
+		if loc.File == "" || loc.Entry != "" {
+			continue
+		}
+		if !isMuOSText(catalogue, loc.File) {
+			errs = append(errs, fmt.Errorf("%s is not a muOS description text", loc.File))
+			continue
+		}
+		switch err := os.Remove(loc.File); {
+		case err == nil:
+			removed++
+		case errors.Is(err, fs.ErrNotExist):
+		default:
+			errs = append(errs, err)
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
+// isMuOSText reports whether path is a description text where muOS keeps
+// them: <catalogue>/<system>/text/<name>.txt.
+func isMuOSText(catalogue, path string) bool {
+	if !filepath.IsAbs(path) || filepath.Ext(path) != ".txt" {
+		return false
+	}
+	rel, err := filepath.Rel(catalogue, filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	return len(parts) == 3 && parts[0] != ".." && parts[1] == "text"
 }
