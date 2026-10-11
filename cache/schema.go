@@ -12,7 +12,7 @@ import (
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 )
 
-const schemaVersion = 15
+const schemaVersion = 16
 
 // nowUTC returns the current UTC time formatted as RFC3339 for consistent datetime storage
 func nowUTC() string {
@@ -159,6 +159,9 @@ func migrateIfNeeded(db *sql.DB) error {
 			return fmt.Errorf("migration to v15 failed: %w", err)
 		}
 	}
+
+	// v16 adds downloaded_files, the record of what each download wrote. The table is new,
+	// so there is nothing to migrate: createTables (which runs after this) creates it.
 
 	return nil
 }
@@ -642,6 +645,27 @@ func createTables(db *sql.DB) error {
 			PRIMARY KEY (device_id, rom_id, file_name)
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	// What each download wrote, per ROM, so a later delete removes exactly those files.
+	// Not cleared by ClearMetadata ("Rebuild Cache"): the files are still on the card.
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS downloaded_files (
+			rom_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			path TEXT NOT NULL,
+			detail TEXT NOT NULL DEFAULT '',
+			recorded_at TEXT NOT NULL,
+			PRIMARY KEY (rom_id, kind, path, detail)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_downloaded_files_path ON downloaded_files(path)`)
 	if err != nil {
 		return err
 	}

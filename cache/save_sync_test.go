@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -110,8 +111,8 @@ func TestMigrate_V14AddsIdentityHash(t *testing.T) {
 	if err := db.QueryRow(`SELECT value FROM cache_metadata WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "15" {
-		t.Errorf("schema_version = %s, want 15", version)
+	if version != strconv.Itoa(schemaVersion) {
+		t.Errorf("schema_version = %s, want %d", version, schemaVersion)
 	}
 }
 
