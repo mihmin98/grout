@@ -43,6 +43,10 @@ func (s *UpdateScreen) Draw(input UpdateInput) (UpdateOutput, error) {
 			return update.CheckForUpdate(input.CFW, input.ReleaseChannel, input.Host)
 		},
 	)
+	if errors.Is(err, update.ErrUpdatesDisabled) {
+		s.tell(localize("update_disabled", "Updates are turned off in this build."))
+		return output, nil
+	}
 	if err != nil {
 		gaba.GetLogger().Debug("Failed to check for updates", "error", err)
 		s.tell(localizeWith("update_check_error", "{{.Error}}", map[string]any{"Error": err.Error()}))

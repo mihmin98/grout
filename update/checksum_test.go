@@ -3,6 +3,7 @@ package update
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/atomic"
 
 	"grout/cfw"
+	"grout/settings"
 )
 
 // Nothing else checks what was downloaded: the expected size only drives the
@@ -97,4 +99,20 @@ func assetNameFor(t *testing.T) string {
 		t.Skip("no distribution asset name for muOS")
 	}
 	return name
+}
+
+// This build never updates itself. The check refuses before anything else: with
+// no host, Match RomM would otherwise fail for the missing host, and a stamped
+// version would otherwise go on to fetch the versions file.
+func TestCheckForUpdate_TurnedOff(t *testing.T) {
+	t.Setenv("GROUT_VERSION", "v5.3.1.3")
+
+	info, err := CheckForUpdate(cfw.ROCKNIX, settings.ReleaseChannelMatchRomM, nil)
+
+	if !errors.Is(err, ErrUpdatesDisabled) {
+		t.Fatalf("err = %v, want ErrUpdatesDisabled", err)
+	}
+	if info != nil {
+		t.Errorf("info = %+v, want none", info)
+	}
 }

@@ -1,6 +1,7 @@
 package update
 
 import (
+	"errors"
 	"grout/cfw"
 	"grout/settings"
 	"sync"
@@ -88,6 +89,10 @@ func (a *AutoUpdate) run() {
 	a.mu.Unlock()
 
 	info, err := CheckForUpdate(a.cfwType, channel, a.host)
+	if errors.Is(err, ErrUpdatesDisabled) {
+		logger.Debug("AutoUpdate: Updates are turned off in this build")
+		return
+	}
 	if err != nil {
 		logger.Debug("AutoUpdate: Failed to check for updates", "error", err)
 		return

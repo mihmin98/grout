@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"grout/cfw"
 	"grout/romm"
@@ -60,10 +61,23 @@ func getInstallRoot(c cfw.CFW) (string, error) {
 	return root, nil
 }
 
+// selfUpdate is off in this build. It is a fork installed beside upstream
+// Grout, and an upstream release unpacked over it would replace the fork.
+const selfUpdate = false
+
+// ErrUpdatesDisabled is what every update check returns while selfUpdate is
+// off.
+var ErrUpdatesDisabled = errors.New("updates are turned off in this build")
+
 // CheckForUpdate checks for available updates based on the release channel.
 // For ReleaseChannelMatchRomM, the host parameter is required to fetch the RomM version.
 // For other channels, the host parameter is optional and ignored.
+// With selfUpdate off it returns ErrUpdatesDisabled before any request.
 func CheckForUpdate(c cfw.CFW, releaseChannel settings.ReleaseChannel, host *settings.Host) (*Info, error) {
+	if !selfUpdate {
+		return nil, ErrUpdatesDisabled
+	}
+
 	currentVersion := version.Get().Version
 
 	if currentVersion == "dev" {
