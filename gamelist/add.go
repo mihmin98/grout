@@ -24,6 +24,9 @@ type RomGameEntry struct {
 	Game         library.Game
 	Platform     library.Platform
 	RomDirectory string
+	// RomID is the RomM ID of the game the entry describes, so what is written
+	// can be recorded against it. Zero when unknown.
+	RomID int
 }
 
 func (e RomGameEntry) FileName() string {

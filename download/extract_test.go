@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"go.uber.org/atomic"
@@ -63,13 +65,13 @@ func TestExtractArchive(t *testing.T) {
 	archivePath := filepath.Join(dir, "Game.zip")
 	zipOf(t, archivePath, "Game.sfc")
 
-	path, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
 	if err != nil {
 		t.Fatalf("ExtractArchive: %v", err)
 	}
 
-	if want := filepath.Join(dir, "Game.sfc"); path != want {
-		t.Errorf("path = %q, want %q", path, want)
+	if want := filepath.Join(dir, "Game.sfc"); unpacked.Path != want {
+		t.Errorf("path = %q, want %q", unpacked.Path, want)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Game.sfc")); err != nil {
 		t.Errorf("the rom was not unpacked: %v", err)
@@ -87,13 +89,13 @@ func TestExtractArchive_PrefersThePlaylist(t *testing.T) {
 	archivePath := filepath.Join(dir, "FF7.zip")
 	zipOf(t, archivePath, "FF7 (Disc 1).chd", "FF7 (Disc 2).chd", "FF7.m3u")
 
-	path, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
 	if err != nil {
 		t.Fatalf("ExtractArchive: %v", err)
 	}
 
-	if filepath.Base(path) != "FF7.m3u" {
-		t.Errorf("path = %q, want the playlist", path)
+	if filepath.Base(unpacked.Path) != "FF7.m3u" {
+		t.Errorf("path = %q, want the playlist", unpacked.Path)
 	}
 }
 
@@ -133,10 +135,11 @@ func TestExtractMultiFile(t *testing.T) {
 	}
 	zipOf(t, archivePath, "FF7 (Disc 1).chd", "FF7.m3u")
 
-	path, err := ExtractMultiFile(game, romDirectory, &atomic.Float64{})
+	unpacked, err := ExtractMultiFile(game, romDirectory, &atomic.Float64{})
 	if err != nil {
 		t.Fatalf("ExtractMultiFile: %v", err)
 	}
+	path := unpacked.Path
 
 	if filepath.Ext(path) != ".m3u" {
 		t.Errorf("path = %q, want the playlist", path)
@@ -217,5 +220,163 @@ func TestPlan_SetGamePathWithoutFsName(t *testing.T) {
 
 	if got := plan.Entries[0].Game.Path; got != "/roms/nds/Zelda.nds" {
 		t.Errorf("entry path = %q, want the unpacked file", got)
+	}
+}
+
+// The record of a download lists what came out of the archive and nothing
+// else that happens to sit in the rom directory.
+func TestExtractArchive_ReportsWhatItWrote(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Game.srm"), []byte("save"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(dir, "Game.zip")
+	zipOf(t, archivePath, "Game.cue", "Game (Track 1).bin")
+
+	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+	if err != nil {
+		t.Fatalf("ExtractArchive: %v", err)
+	}
+
+	want := []string{filepath.Join(dir, "Game.cue"), filepath.Join(dir, "Game (Track 1).bin")}
+	if !slices.Equal(unpacked.Written, want) {
+		t.Errorf("written = %q, want %q", unpacked.Written, want)
+	}
+}
+
+// A re-download unpacks into a folder that may already hold the game's save
+// and save states (ROCKNIX writes them beside the launched file). They must not
+// be recorded as the download's, or deleting the game would take them.
+func TestExtractMultiFile_ReDownloadLeavesSavesOut(t *testing.T) {
+	tests := []struct {
+		cfw  cfw.CFW
+		want func(romDir string) []string
+	}{
+		{cfw.ROCKNIX, func(romDir string) []string {
+			return []string{
+				filepath.Join(romDir, "FF7", "FF7 (Disc 1).chd"),
+				filepath.Join(romDir, "FF7", "FF7 (Disc 2).chd"),
+				filepath.Join(romDir, "FF7", "FF7.m3u"),
+			}
+		}},
+		// muOS renames the folder and lifts the playlist into the rom directory.
+		{cfw.MuOS, func(romDir string) []string {
+			return []string{
+				filepath.Join(romDir, "_FF7", "FF7 (Disc 1).chd"),
+				filepath.Join(romDir, "_FF7", "FF7 (Disc 2).chd"),
+				filepath.Join(romDir, "FF7.m3u"),
+			}
+		}},
+	}
+
+	for i, tt := range tests {
+		t.Run(string(tt.cfw), func(t *testing.T) {
+			base := t.TempDir()
+			t.Setenv("BASE_PATH", base)
+			t.Setenv(cfw.EnvVar, string(tt.cfw))
+
+			romDirectory := filepath.Join(base, "ROMS", "psx")
+			gameDir := filepath.Join(romDirectory, "FF7")
+			if err := os.MkdirAll(gameDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"FF7.srm", "FF7.state1"} {
+				if err := os.WriteFile(filepath.Join(gameDir, name), []byte("save"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			game := romm.Rom{ID: 900 + i, Name: "FF7", FsName: "FF7.zip", FsNameNoExt: "FF7", HasMultipleFiles: true}
+			archivePath := MultiFileArchivePath(game)
+			if err := os.MkdirAll(filepath.Dir(archivePath), 0755); err != nil {
+				t.Fatal(err)
+			}
+			zipOf(t, archivePath, "FF7 (Disc 1).chd", "FF7 (Disc 2).chd", "FF7.m3u")
+
+			unpacked, err := ExtractMultiFile(game, romDirectory, &atomic.Float64{})
+			if err != nil {
+				t.Fatalf("ExtractMultiFile: %v", err)
+			}
+
+			if want := tt.want(romDirectory); !slices.Equal(unpacked.Written, want) {
+				t.Errorf("written = %q, want %q", unpacked.Written, want)
+			}
+			for _, path := range unpacked.Written {
+				if strings.Contains(path, ".srm") || strings.Contains(path, ".state") {
+					t.Errorf("a save was recorded as downloaded: %s", path)
+				}
+			}
+		})
+	}
+}
+
+func TestMultiFileWritten(t *testing.T) {
+	write := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		onDisk          []string // relative to romDir
+		entries         []string
+		playlistExisted bool
+		want            []string // relative to romDir
+	}{
+		{
+			name:    "in place",
+			onDisk:  []string{"G/G (Disc 1).chd", "G/G.m3u"},
+			entries: []string{"G (Disc 1).chd", "G.m3u"},
+			want:    []string{"G/G (Disc 1).chd", "G/G.m3u"},
+		},
+		{
+			name:    "renamed by muOS",
+			onDisk:  []string{"_G/G (Disc 1).chd", "_G/sub/G (Disc 2).chd"},
+			entries: []string{"G (Disc 1).chd", "sub/G (Disc 2).chd"},
+			want:    []string{"_G/G (Disc 1).chd", "_G/sub/G (Disc 2).chd"},
+		},
+		{
+			name:    "lifted playlist is new",
+			onDisk:  []string{"_G/G (Disc 1).chd", "G.m3u"},
+			entries: []string{"G (Disc 1).chd", "G.m3u"},
+			want:    []string{"_G/G (Disc 1).chd", "G.m3u"},
+		},
+		{
+			name:            "playlist was already there",
+			onDisk:          []string{"_G/G (Disc 1).chd", "G.m3u"},
+			entries:         []string{"G (Disc 1).chd", "G.m3u"},
+			playlistExisted: true,
+			want:            []string{"_G/G (Disc 1).chd"},
+		},
+		{
+			name:    "missing entry left out",
+			onDisk:  []string{"G/G (Disc 1).chd"},
+			entries: []string{"G (Disc 1).chd", "G (Disc 2).chd"},
+			want:    []string{"G/G (Disc 1).chd"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			romDir := t.TempDir()
+			for _, rel := range tt.onDisk {
+				write(t, filepath.Join(romDir, rel))
+			}
+
+			got := multiFileWritten(tt.entries, filepath.Join(romDir, "G"), romDir, "G", tt.playlistExisted)
+
+			want := make([]string, 0, len(tt.want))
+			for _, rel := range tt.want {
+				want = append(want, filepath.Join(romDir, rel))
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
 	}
 }

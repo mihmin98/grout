@@ -24,39 +24,89 @@ func IsArchive(fileName string) bool {
 	return false
 }
 
+// Unpacked is the outcome of unpacking a game.
+type Unpacked struct {
+	// Path is what the frontend should point at.
+	Path string
+	// Written lists the files the unpacking put on the card, taken from the
+	// archive's own listing rather than the folder, which may hold saves.
+	Written []string
+}
+
 // ExtractMultiFile unpacks a game that arrived as a single archive holding
-// several files, and returns the path the frontend should point at.
+// several files.
 //
 // The archive lands in a temp directory rather than the rom directory, so a
 // failure here leaves nothing half-unpacked where the frontend would find it.
-func ExtractMultiFile(game romm.Rom, romDirectory string, progress *atomic.Float64) (string, error) {
+func ExtractMultiFile(game romm.Rom, romDirectory string, progress *atomic.Float64) (Unpacked, error) {
 	archivePath := MultiFileArchivePath(game)
 	extractDir := filepath.Join(romDirectory, game.FsNameNoExt)
 
+	// Listed before unpacking: a re-download unpacks into a folder that may
+	// already hold the game's saves, and only the archive knows what is new.
+	entries, err := archive.ZipFileNames(archivePath)
+	if err != nil {
+		os.Remove(archivePath)
+		return Unpacked{}, fmt.Errorf("reading %s: %w", game.Name, err)
+	}
+	playlistExisted := files.FileExists(filepath.Join(romDirectory, game.FsNameNoExt+".m3u"))
+
 	if err := archive.Unzip(archivePath, extractDir, progress); err != nil {
 		os.Remove(archivePath)
-		return "", fmt.Errorf("unpacking %s: %w", game.Name, err)
+		return Unpacked{}, fmt.Errorf("unpacking %s: %w", game.Name, err)
 	}
 
 	if err := cfw.OrganizeExtractedRom(extractDir, romDirectory, game.FsNameNoExt); err != nil {
 		os.Remove(archivePath)
 		os.RemoveAll(extractDir)
-		return "", fmt.Errorf("arranging %s for this firmware: %w", game.Name, err)
+		return Unpacked{}, fmt.Errorf("arranging %s for this firmware: %w", game.Name, err)
 	}
 
 	if err := os.Remove(archivePath); err != nil {
 		slog.Default().Warn("Could not remove the downloaded archive", "path", archivePath, "error", err)
 	}
 
-	return multiFileGamePath(romDirectory, extractDir, game.FsNameNoExt), nil
+	return Unpacked{
+		Path:    multiFileGamePath(romDirectory, extractDir, game.FsNameNoExt),
+		Written: multiFileWritten(entries, extractDir, romDirectory, game.FsNameNoExt, playlistExisted),
+	}, nil
+}
+
+// multiFileWritten maps a multi-file archive's entries to where they are after
+// unpacking and the firmware's rearranging: in extractDir, or in the
+// underscore-prefixed folder muOS renames it to. A playlist the firmware wrote
+// into romDir counts when it was not there before.
+func multiFileWritten(entries []string, extractDir, romDir, base string, playlistExisted bool) []string {
+	movedDir := filepath.Join(romDir, "_"+base)
+
+	written := make([]string, 0, len(entries)+1)
+	for _, entry := range entries {
+		inPlace, moved := filepath.Join(extractDir, entry), filepath.Join(movedDir, entry)
+		switch {
+		case files.FileExists(inPlace):
+			written = append(written, inPlace)
+		case files.FileExists(moved):
+			written = append(written, moved)
+		default:
+			// A playlist the firmware lifted out, or a file it dropped.
+			slog.Default().Debug("Unpacked file not found where expected", "entry", entry, "dir", extractDir)
+		}
+	}
+
+	if !playlistExisted {
+		if playlist := filepath.Join(romDir, base+".m3u"); files.FileExists(playlist) {
+			written = append(written, playlist)
+		}
+	}
+	return written
 }
 
 // ExtractArchive unpacks a rom that arrived as a .zip or .7z straight into its
-// rom directory, and returns the path the frontend should point at.
+// rom directory.
 //
 // The archive is removed once it is unpacked. A failure leaves it alone, so
 // the game is still playable from the archive if the frontend can read one.
-func ExtractArchive(archivePath, romDirectory string, progress *atomic.Float64) (string, error) {
+func ExtractArchive(archivePath, romDirectory string, progress *atomic.Float64) (Unpacked, error) {
 	sevenZip := strings.EqualFold(filepath.Ext(archivePath), ".7z")
 
 	var contents []string
@@ -67,7 +117,7 @@ func ExtractArchive(archivePath, romDirectory string, progress *atomic.Float64) 
 		contents, err = archive.ZipFileNames(archivePath)
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", filepath.Base(archivePath), err)
+		return Unpacked{}, fmt.Errorf("reading %s: %w", filepath.Base(archivePath), err)
 	}
 
 	if sevenZip {
@@ -76,14 +126,18 @@ func ExtractArchive(archivePath, romDirectory string, progress *atomic.Float64) 
 		err = archive.Unzip(archivePath, romDirectory, progress)
 	}
 	if err != nil {
-		return "", fmt.Errorf("unpacking %s: %w", filepath.Base(archivePath), err)
+		return Unpacked{}, fmt.Errorf("unpacking %s: %w", filepath.Base(archivePath), err)
 	}
 
 	if err := os.Remove(archivePath); err != nil {
 		slog.Default().Warn("Could not remove the archive after unpacking", "path", archivePath, "error", err)
 	}
 
-	return filepath.Join(romDirectory, playablePath(contents)), nil
+	written := make([]string, 0, len(contents))
+	for _, name := range contents {
+		written = append(written, filepath.Join(romDirectory, name))
+	}
+	return Unpacked{Path: filepath.Join(romDirectory, playablePath(contents)), Written: written}, nil
 }
 
 // playablePath picks what to launch out of an archive's contents: the playlist

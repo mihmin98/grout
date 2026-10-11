@@ -23,6 +23,9 @@ type Item struct {
 	URL      string
 	Location string
 	GameName string
+	// RomID is the game the file belongs to, for the record of what a
+	// download wrote.
+	RomID int
 	// IsImage marks files that are normalised after download. Videos and
 	// manuals are written as they arrive.
 	IsImage bool
@@ -175,6 +178,17 @@ func (p Plan) SetGamePath(fileName, path string) {
 	}
 }
 
+// MetadataLocations says where the firmware keeps each planned game's
+// metadata. Call it after unpacking, once each entry points at the file that
+// came out, since a gamelist entry is found again by that path.
+func (p Plan) MetadataLocations() []cfw.MetadataLocation {
+	locations := make([]cfw.MetadataLocation, 0, len(p.Entries))
+	for _, entry := range p.Entries {
+		locations = append(locations, cfw.MetadataLocationFor(entry))
+	}
+	return locations
+}
+
 // SkipReason says why a game was left out of a plan.
 type SkipReason struct {
 	Game   romm.Rom
@@ -224,6 +238,7 @@ func BuildPlan(config settings.Config, host settings.Host, platform romm.Platfor
 			Game:         game.ToGame(textmatch.PrepareRomName(game.Name, regions), rom.Location, artPaths),
 			Platform:     gamePlatform.ToPlatform(),
 			RomDirectory: romDirectory,
+			RomID:        game.ID,
 		})
 	}
 
@@ -254,7 +269,7 @@ func hasCoverArt(g romm.Rom) bool {
 func romItem(config settings.Config, host settings.Host, game romm.Rom, romDirectory string, selectedFileID int) (Item, error) {
 	if game.HasMultipleFiles {
 		source, _ := url.JoinPath(host.URL(), "/api/roms/", strconv.Itoa(game.ID), "content", game.FsName)
-		return Item{URL: source, Location: MultiFileArchivePath(game), GameName: game.Name}, nil
+		return Item{URL: source, Location: MultiFileArchivePath(game), GameName: game.Name, RomID: game.ID}, nil
 	}
 
 	// A cached row written without a files array would panic on Files[0].
@@ -282,6 +297,7 @@ func romItem(config settings.Config, host settings.Host, game romm.Rom, romDirec
 		URL:      source,
 		Location: filepath.Join(romDirectory, file.FileName),
 		GameName: game.Name,
+		RomID:    game.ID,
 	}, nil
 }
 
@@ -314,6 +330,7 @@ func artItems(config settings.Config, host settings.Host, game romm.Rom, platfor
 			URL:      source,
 			Location: location,
 			GameName: game.Name,
+			RomID:    game.ID,
 			IsImage:  spec.fixedExt == "",
 		})
 	}

@@ -3,6 +3,7 @@ package cfw
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"grout/cfw/muos"
 	"grout/gamelist"
@@ -59,5 +60,45 @@ func FillGamesMetadata(entries []gamelist.RomGameEntry) {
 		}
 
 	case GamelistNone:
+	}
+}
+
+// MetadataLocation is where FillGamesMetadata put one game's metadata: an entry
+// in a gamelist the platform's games share (File is the gamelist, Entry the
+// entry's <path>), or a file of the game's own (Entry is empty). File is empty
+// when the firmware keeps no metadata.
+type MetadataLocation struct {
+	RomID int
+	File  string
+	Entry string
+}
+
+// MetadataLocationFor says where FillGamesMetadata writes an entry on the
+// active firmware. The two must agree, or a deletion misses what was written.
+func MetadataLocationFor(entry gamelist.RomGameEntry) MetadataLocation {
+	switch ActiveFirmware().Gamelist() {
+	case GamelistEmulationStation:
+		return gamelistLocation(entry, gamelist.GameListFileName)
+
+	case GamelistMiyoo:
+		return gamelistLocation(entry, gamelist.MiyooGameListFileName)
+
+	case GamelistMuOSText:
+		textDir := muos.GetTextDirectory(entry.Platform.FSSlug, entry.Platform.Name)
+		return MetadataLocation{RomID: entry.RomID, File: filepath.Join(textDir, entry.Game.BaseName+".txt")}
+	}
+	return MetadataLocation{RomID: entry.RomID}
+}
+
+// gamelistLocation is an entry's place in the platform's gamelist. An entry
+// without a path cannot be found again by it, so it has no location.
+func gamelistLocation(entry gamelist.RomGameEntry, name gamelist.FileName) MetadataLocation {
+	if entry.Game.Path == "" {
+		return MetadataLocation{RomID: entry.RomID}
+	}
+	return MetadataLocation{
+		RomID: entry.RomID,
+		File:  filepath.Join(entry.RomDirectory, string(name)),
+		Entry: entry.Game.Path,
 	}
 }

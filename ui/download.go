@@ -10,6 +10,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 
+	"grout/catalog"
 	"grout/cfw"
 	"grout/download"
 	"grout/files"
@@ -91,13 +92,14 @@ func (s *DownloadScreen) draw(input DownloadInput) (DownloadOutput, error) {
 		return output, nil
 	}
 
-	s.unpack(input, plan, downloaded)
+	written := s.unpack(input, plan, downloaded)
 
 	if len(plan.Art) > 0 {
 		s.fetchArt(plan.Art, downloaded, input.Host)
 	}
 
 	cfw.FillGamesMetadata(plan.Entries)
+	catalog.SaveDownloadRecords(download.Records(written, plan.Art, plan.MetadataLocations()))
 
 	output.DownloadedGames = downloaded
 	return output, nil
@@ -159,12 +161,14 @@ func gamesThatArrived(selected []romm.Rom, arrived map[string]bool) []romm.Rom {
 }
 
 // unpack expands whatever arrived as an archive and points the metadata entry
-// at the file that came out.
+// at the file that came out. It returns the rom files each game left on the
+// card, by ROM ID, for the record of what the download wrote.
 //
 // A game that fails to unpack keeps its archive and is left out of the
 // metadata rather than failing the run, so the rest of the batch still lands.
-func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloaded []romm.Rom) {
+func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloaded []romm.Rom) map[int][]string {
 	logger := gaba.GetLogger()
+	written := make(map[int][]string, len(downloaded))
 
 	for _, game := range downloaded {
 		// Where the rom actually landed. A game shipping several versions is
@@ -178,30 +182,37 @@ func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloa
 		switch {
 		case game.HasMultipleFiles:
 			romDirectory := cfw.PlatformRomDirectory(input.Config, platformOf(input.Platform, game).FSSlug)
-			path, err := s.extracting(game.Name, func(progress *atomic.Float64) (string, error) {
+			unpacked, err := s.extracting(game.Name, func(progress *atomic.Float64) (download.Unpacked, error) {
 				return download.ExtractMultiFile(game, romDirectory, progress)
 			})
 			if err != nil {
 				logger.Error("Failed to unpack multi-file ROM", "game", game.Name, "error", err)
 				continue
 			}
-			plan.SetGamePath(game.EntryFileName(), path)
+			plan.SetGamePath(game.EntryFileName(), unpacked.Path)
+			written[game.ID] = unpacked.Written
 
 		case input.Config.UnzipDownloads && download.IsArchive(location):
-			path, err := s.extracting(game.Name, func(progress *atomic.Float64) (string, error) {
+			unpacked, err := s.extracting(game.Name, func(progress *atomic.Float64) (download.Unpacked, error) {
 				return download.ExtractArchive(location, filepath.Dir(location), progress)
 			})
 			if err != nil {
 				logger.Warn("Failed to unpack ROM, keeping the archive", "game", game.Name, "error", err)
+				written[game.ID] = []string{location}
 				continue
 			}
-			plan.SetGamePath(game.EntryFileName(), path)
+			plan.SetGamePath(game.EntryFileName(), unpacked.Path)
+			written[game.ID] = unpacked.Written
+
+		default:
+			written[game.ID] = []string{location}
 		}
 	}
+	return written
 }
 
 // extracting runs one unpack behind a progress dialog.
-func (s *DownloadScreen) extracting(gameName string, unpack func(*atomic.Float64) (string, error)) (string, error) {
+func (s *DownloadScreen) extracting(gameName string, unpack func(*atomic.Float64) (download.Unpacked, error)) (download.Unpacked, error) {
 	progress := &atomic.Float64{}
 
 	return gaba.ProcessMessage(
@@ -211,7 +222,7 @@ func (s *DownloadScreen) extracting(gameName string, unpack func(*atomic.Float64
 			ShowProgressBar:     true,
 			Progress:            progress,
 		},
-		func() (string, error) { return unpack(progress) },
+		func() (download.Unpacked, error) { return unpack(progress) },
 	)
 }
 
