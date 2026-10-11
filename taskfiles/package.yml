@@ -99,11 +99,11 @@ tasks:
   rocknix:
     cmds:
       - rm -rf dist/ROCKNIX
-      - mkdir -p dist/ROCKNIX/Grout/lib
-      - cp scripts/ROCKNIX/Grout.sh dist/ROCKNIX/
-      - cp build64/grout scripts/ROCKNIX/logo.png README.md LICENSE dist/ROCKNIX/Grout/
-      - cp -R build64/lib/* dist/ROCKNIX/Grout/lib/
-      - chmod a+x dist/ROCKNIX/Grout/grout dist/ROCKNIX/Grout.sh
+      - mkdir -p dist/ROCKNIX/Grout-Save-Sync/lib
+      - cp scripts/ROCKNIX/Grout-Save-Sync.sh dist/ROCKNIX/
+      - cp build64/grout scripts/ROCKNIX/logo.png README.md LICENSE dist/ROCKNIX/Grout-Save-Sync/
+      - cp -R build64/lib/* dist/ROCKNIX/Grout-Save-Sync/lib/
+      - chmod a+x dist/ROCKNIX/Grout-Save-Sync/grout dist/ROCKNIX/Grout-Save-Sync.sh
     silent: true
 
   trimui:

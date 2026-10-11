@@ -80,7 +80,7 @@ const qrSize = 256
 // the repository link could not be drawn, which is not worth an empty box.
 func infoSections(input InfoInput, qrcode string) []gaba.Section {
 	sections := []gaba.Section{
-		gaba.NewInfoSection("Grout", groutFacts(input.CFW)),
+		gaba.NewInfoSection(version.AppName, groutFacts(input.CFW)),
 		gaba.NewInfoSection("RomM", serverFacts(input.Host, input.RommVersion)),
 	}
 

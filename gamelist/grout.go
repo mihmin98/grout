@@ -2,15 +2,18 @@ package gamelist
 
 import (
 	"grout/files"
+	"grout/version"
 	"log/slog"
 	"os"
 )
 
 const (
-	GroutEntryGameListName = "Grout"
+	// GroutEntryGameListName keys the launcher entry, so it must differ from
+	// upstream Grout's "Grout" for both to have an entry in the same list.
+	GroutEntryGameListName = version.AppName
 )
 
-func AddGroutEntry(path string, groutEntryPath string) {
+func AddGroutEntry(path string, groutEntryPath string, logoPath string) {
 	slog.Default().Debug("looking for correct gamelist.xml path", "path", path)
 	gl := New()
 
@@ -42,7 +45,7 @@ func AddGroutEntry(path string, groutEntryPath string) {
 	gl.AddOrUpdateEntry(GroutEntryGameListName, map[string]string{
 		NameElement:      GroutEntryGameListName,
 		DescElement:      "Download games wirelessly from your RomM instance",
-		ImageElement:     "./Grout/logo.png",
+		ImageElement:     logoPath,
 		PlayersElement:   "1",
 		GenreElement:     "Rom Manager",
 		PathElement:      groutEntryPath,

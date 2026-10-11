@@ -46,7 +46,7 @@ func AddGroutToGamelist(c CFW) {
 		return
 	}
 
-	gamelist.AddGroutEntry(path, launcher)
+	gamelist.AddGroutEntry(path, launcher, f.GroutLogoPath())
 	scheduleESRestart()
 }
 

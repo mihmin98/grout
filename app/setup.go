@@ -13,6 +13,7 @@ import (
 	"grout/saves"
 	"grout/settings"
 	"grout/ui"
+	"grout/version"
 	"log"
 	"log/slog"
 	"os"
@@ -90,7 +91,7 @@ func setupInputMapping(currentCFW cfw.CFW) {
 
 func initFramework(currentCFW cfw.CFW) {
 	gabaOptions := gaba.Options{
-		WindowTitle:          "Grout",
+		WindowTitle:          version.AppName,
 		PrimaryThemeColorHex: 0x007C77,
 		ShowBackground:       true,
 		IsNextUI:             currentCFW == cfw.NextUI,

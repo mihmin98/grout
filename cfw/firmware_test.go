@@ -96,6 +96,9 @@ func TestFirmwares_EmulationStationFamilyIsConsistent(t *testing.T) {
 		if es != (f.GroutLauncherPath() != "") {
 			t.Errorf("%s: IsBasedOnEmulationStation=%v but launcher path is %q", c, es, f.GroutLauncherPath())
 		}
+		if es != (f.GroutLogoPath() != "") {
+			t.Errorf("%s: IsBasedOnEmulationStation=%v but logo path is %q", c, es, f.GroutLogoPath())
+		}
 
 		// The method on CFW must agree with the registry it now reads from.
 		if c.IsBasedOnEmulationStation() != es {
@@ -116,6 +119,22 @@ func TestFirmwares_GamelistShortcutIsCompleteOrAbsent(t *testing.T) {
 		if hasFile != hasLauncher {
 			t.Errorf("%s has gamelist=%v launcher=%v; it needs both or neither", c, hasFile, hasLauncher)
 		}
+	}
+}
+
+// On ROCKNIX this fork installs as Grout-Save-Sync beside upstream's Grout, so
+// its shortcut, logo and launch script must name that folder, not upstream's.
+func TestFirmwares_RocknixInstallsBesideUpstream(t *testing.T) {
+	f := Lookup(ROCKNIX)
+
+	if got := f.GroutLauncherPath(); got != "./Grout-Save-Sync.sh" {
+		t.Errorf("launcher = %q, want ./Grout-Save-Sync.sh", got)
+	}
+	if got := f.GroutLogoPath(); got != "./Grout-Save-Sync/logo.png" {
+		t.Errorf("logo = %q, want ./Grout-Save-Sync/logo.png", got)
+	}
+	if got := f.Packaging().LaunchScript; got != "Grout-Save-Sync.sh" {
+		t.Errorf("launch script = %q, want Grout-Save-Sync.sh", got)
 	}
 }
 

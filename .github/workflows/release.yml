@@ -102,7 +102,7 @@ jobs:
           cd dist/Grout.pak && zip -r ../Grout.pak.zip . && cd ../..
           cd dist/muOS && zip -r Grout.muxapp Grout && mv Grout.muxapp ../Grout.muxapp && cd ../..
           cd dist/Knulli && zip -r ../Grout-Knulli.zip Grout && cd ../..
-          cd dist/ROCKNIX && zip -r ../Grout-ROCKNIX.zip Grout.sh Grout && cd ../..
+          cd dist/ROCKNIX && zip -r ../Grout-ROCKNIX.zip Grout-Save-Sync.sh Grout-Save-Sync && cd ../..
           cd dist/ArkOS && zip -r ../Grout-ArkOS.zip Grout.sh Grout && cd ../..
           cd dist/Trimui && zip -r ../Grout-Trimui.zip Grout && cd ../..
           cd dist/Batocera-arm64 && zip -r ../Grout-Batocera-arm64.zip Grout.sh Grout && cd ../..

@@ -5,6 +5,7 @@ import (
 	"grout/catalog"
 	"grout/romm"
 	"grout/settings"
+	"grout/version"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 	buttons "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool/constants"
@@ -96,7 +97,7 @@ func (s *PlatformSelectionScreen) Draw(input PlatformSelectionInput) (PlatformSe
 		}
 	}
 
-	options := gaba.DefaultListOptions("Grout", menuItems)
+	options := gaba.DefaultListOptions(version.AppName, menuItems)
 	if !settings.IsKidModeEnabled() {
 		options.ActionButton = buttons.VirtualButtonX
 		if input.ShowSaveSync {

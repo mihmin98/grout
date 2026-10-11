@@ -72,6 +72,9 @@ type Firmware struct {
 	// groutLauncherPath is the command that entry runs; it follows the
 	// firmware's package layout.
 	groutLauncherPath string
+	// groutLogoPath is the entry's image, relative to the gamelist like the
+	// launcher.
+	groutLogoPath string
 
 	// gamelist is how this firmware expects game metadata to be written.
 	gamelist GamelistFormat
@@ -230,6 +233,14 @@ func (f *Firmware) GroutLauncherPath() string {
 		return ""
 	}
 	return f.groutLauncherPath
+}
+
+// GroutLogoPath is the image the shortcut entry shows.
+func (f *Firmware) GroutLogoPath() string {
+	if f == nil {
+		return ""
+	}
+	return f.groutLogoPath
 }
 
 // ID is the value the launch script puts in the CFW environment variable.
@@ -402,6 +413,7 @@ var firmwares = map[CFW]*Firmware{
 		saveDirectories:       knulli.SaveDirectories,
 		gamelist:              GamelistEmulationStation,
 		groutLauncherPath:     "./Grout/Grout.sh",
+		groutLogoPath:         "./Grout/logo.png",
 		emulationStationBased: true,
 		packaging:             Packaging{Asset: "Grout-Knulli.zip", LaunchScript: "Grout/Grout.sh", InstallDepth: 2},
 	},
@@ -417,10 +429,11 @@ var firmwares = map[CFW]*Firmware{
 		savesBesideRoms:       true,
 		pairsClockFiles:       true,
 		gamelist:              GamelistEmulationStation,
-		groutLauncherPath:     "./Grout.sh",
+		groutLauncherPath:     "./Grout-Save-Sync.sh",
+		groutLogoPath:         "./Grout-Save-Sync/logo.png",
 		emulationStationBased: true,
 		inputMapping:          rocknix.GetInputMappingBytes,
-		packaging:             Packaging{Asset: "Grout-ROCKNIX.zip", LaunchScript: "Grout.sh", InstallDepth: 2},
+		packaging:             Packaging{Asset: "Grout-ROCKNIX.zip", LaunchScript: "Grout-Save-Sync.sh", InstallDepth: 2},
 	},
 	ArkOS: {
 		id:                    ArkOS,
@@ -434,6 +447,7 @@ var firmwares = map[CFW]*Firmware{
 		savesBesideRoms:       true,
 		gamelist:              GamelistEmulationStation,
 		groutLauncherPath:     "./Grout.sh",
+		groutLogoPath:         "./Grout/logo.png",
 		emulationStationBased: true,
 		inputMapping:          arkos.GetInputMappingBytes,
 		packaging:             Packaging{Asset: "Grout-ArkOS.zip", LaunchScript: "Grout.sh", InstallDepth: 2},
@@ -450,6 +464,7 @@ var firmwares = map[CFW]*Firmware{
 		saveDirectories:       batocera.SaveDirectories,
 		gamelist:              GamelistEmulationStation,
 		groutLauncherPath:     "./Grout/Grout.sh",
+		groutLogoPath:         "./Grout/logo.png",
 		emulationStationBased: true,
 		packaging: Packaging{ArchAssets: map[string]string{
 			"arm64": "Grout-Batocera-arm64.zip",

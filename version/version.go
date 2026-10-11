@@ -2,6 +2,11 @@ package version
 
 import "os"
 
+// AppName is what this build calls itself on screen and in the frontend's
+// launcher list. This fork installs beside upstream Grout, so the two must not
+// share a name.
+const AppName = "Grout Save Sync"
+
 var (
 	Version   = "dev"
 	GitCommit = "unknown"
