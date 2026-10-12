@@ -42,7 +42,7 @@ The save-sync, cache and CFW code is spread across many packages, so call sites 
 
 ## Commands
 
-Local dev needs Go (version from `go.mod`), SDL2 dev libraries (`sdl2`, `sdl2_ttf`, `sdl2_gfx`, `sdl2_image`) and [Task](https://taskfile.dev). Most packages link SDL through the gabagool toolkit via cgo, so even `go test` needs the SDL headers.
+Local dev needs Go (version from `go.mod`), SDL2 dev libraries (`sdl2`, `sdl2_ttf`, `sdl2_gfx`, `sdl2_image`) and [Task](https://taskfile.dev) (on Arch the `go-task` package installs it as `go-task`, not `task`). Most packages link SDL through the gabagool toolkit via cgo, so even `go test` needs the SDL headers.
 
 ```sh
 go build ./...
@@ -70,20 +70,19 @@ ROCKNIX is the fork's only target. Deployment is manual: the package is copied t
 
 - Docker with **buildx**, i.e. the `docker-buildx` package. The build runs `docker buildx build --load`.
 - **arm64 emulation**, because the image is built for `linux/arm64` on an x86_64 host. Use the `qemu-user-static` and `qemu-user-static-binfmt` packages, or run `docker run --privileged --rm tonistiigi/binfmt --install arm64`. Check that `/proc/sys/fs/binfmt_misc/qemu-aarch64` exists.
-- **Task**. On Arch the `go-task` package installs the binary as `go-task`, not `task`.
 - Network access to pull the base image `ghcr.io/brandonkowalski/quasimodo:latest`. It provides the Go and arm64 SDL2 toolchain, so host SDL/Go aren't needed for this build.
 
-**Build and package:**
+**Build and package:** always use `./build_rocknix.sh`, not the Task targets.
 
 ```sh
-task build:arm64        # Docker cross-compile → build64/grout + build64/lib/libSDL2_gfx-1.0.so.0 (log: build64.log)
-task package:rocknix    # → dist/ROCKNIX/Grout-Save-Sync.sh + dist/ROCKNIX/Grout-Save-Sync/
+./build_rocknix.sh                     # → dist/ROCKNIX/Grout-Save-Sync.sh + dist/ROCKNIX/Grout-Save-Sync/
+./build_rocknix.sh --version 5.3.1.4   # override the version (default: pak.json .version)
+./build_rocknix.sh --no-cache          # rebuild the Docker image from scratch
 ```
 
-- The version comes from `pak.json` `.version`; override it with `task build:arm64 GROUT_VERSION=...`.
-- Add `NO_CACHE=--no-cache` for a clean image build.
-- Build output only shows on failure; otherwise it goes to `build64.log`.
-- Without Task, the equivalent build step is `docker buildx build --load --platform=linux/arm64 --build-arg GITHUB_ACTIONS=false -t grout-build-arm64 -f docker/Dockerfile .`. Then `docker create` a container and `docker cp` out `/build/grout` and `/usr/lib/aarch64-linux-gnu/libSDL2_gfx-1.0.so.0.0.2`, saving the latter as `lib/libSDL2_gfx-1.0.so.0`. Lay files out as in the `rocknix` task in `taskfiles/package.yml`.
+- The script checks the prerequisites above, cross-compiles in Docker, extracts `grout` and `libSDL2_gfx` into `build64/`, and lays out `dist/ROCKNIX/` like the `rocknix` task in `taskfiles/package.yml`. Task is not needed.
+- It prints one line per Docker build step; the full log is in `build64.log`, and its last 40 lines are shown on failure.
+- Rebuild after every code change before the user tests on the device. `dist/` is not rebuilt by `go build`/`go test`, so a stale package silently lacks the change.
 
 **Manual deploy:**
 
