@@ -26,7 +26,7 @@ func TestSaveSyncUploadsALocalSave(t *testing.T) {
 		CFW: "KNULLI", Server: server, Platforms: []string{"snes"},
 		Existing: []string{"roms/tools"},
 	})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	// A save only counts if grout can match it to a game it knows about, so
 	// its name is the rom's.
@@ -54,7 +54,7 @@ func TestSaveSyncWithNothingToDo(t *testing.T) {
 		CFW: "KNULLI", Server: romm(t), Platforms: []string{"snes"},
 		Existing: []string{"roms/tools"},
 	})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	s.press("y") // the sync menu
 	s.press("a") // Sync Now
@@ -104,7 +104,7 @@ func TestSyncHistoryShowsWhatSynced(t *testing.T) {
 		CFW: "KNULLI", Server: romm(t), Platforms: []string{"snes"},
 		Existing: []string{"roms/tools"},
 	})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 	// The server is shared with the other tests, which upload a save for the
 	// same game. Contents of its own make this one an upload, which is what
 	// puts it in the history.

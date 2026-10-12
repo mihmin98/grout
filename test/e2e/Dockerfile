@@ -2,7 +2,7 @@
 #
 # Everything runs inside this image, so the only thing the host needs is
 # Docker. That makes the same command work on macOS and on CI runners.
-FROM golang:1.25-bookworm
+FROM golang:1.26-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-gfx-dev \

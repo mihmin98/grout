@@ -146,6 +146,35 @@ func TestPlanFileDownload_RefusesNonSaveName(t *testing.T) {
 	}
 }
 
+// A Dreamcast VMU with no local save is written as <rom>.A1.bin, a save name on
+// dc only: the same "bin" download on another platform would be a ROM track.
+func TestPlanFileDownload_DreamcastVMU(t *testing.T) {
+	t.Setenv(cfw.EnvVar, string(cfw.Knulli))
+	dir := t.TempDir()
+
+	item := downloadItem(dir, "Game.chd", "Game.A1 [2026-01-01_00-00-00].bin", "bin")
+	item.LocalSave.FSSlug = "dc"
+	p, err := planFileDownload(item, []byte("vmu bytes"), &settings.Config{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "Game.A1.bin"); p.primary != want {
+		t.Errorf("primary = %q, want %q", p.primary, want)
+	}
+
+	// A binding that maps the RomM platform onto the device's dc folder counts too.
+	item.LocalSave.FSSlug = "dreamcast"
+	cfg := &settings.Config{PlatformsBinding: map[string]string{"dreamcast": "dc"}}
+	if p, err := planFileDownload(item, []byte("vmu bytes"), cfg, false); err != nil {
+		t.Errorf("bound to dc: %v (target %q)", err, p.primary)
+	}
+
+	item.LocalSave.FSSlug = "psx"
+	if _, err := planFileDownload(item, []byte("bytes"), &settings.Config{}, false); !errors.Is(err, errNonSaveName) {
+		t.Errorf("psx .bin: err = %v, want errNonSaveName", err)
+	}
+}
+
 func TestPlanFileDownload_LocalPathWins(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
 	dir := t.TempDir()

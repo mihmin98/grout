@@ -15,7 +15,7 @@ const fixtureRom = "not a real rom"
 // which is the whole point of the mapping.
 func TestDownloadPutsTheRomInItsMappedFolder(t *testing.T) {
 	s := start(t, options{CFW: "MUOS", Server: romm(t), Platforms: []string{"snes"}})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	s.press("a") // the platform
 	s.press("a") // the game
@@ -41,7 +41,7 @@ func TestDownloadWritesTheGamelistForEmulationStation(t *testing.T) {
 		// itself to the gamelist in it at startup.
 		Existing: []string{"roms/tools"},
 	})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	s.press("a", "a", "a")
 
@@ -70,7 +70,7 @@ func TestDownloadWritesTheGamelistForEmulationStation(t *testing.T) {
 // has to leave something different behind.
 func TestDownloadWritesMuOSMetadata(t *testing.T) {
 	s := start(t, options{CFW: "MUOS", Server: romm(t), Platforms: []string{"snes"}})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	s.press("a", "a", "a")
 	s.awaitCardFile("ROMS/snes/Test Game (USA).sfc")
@@ -86,7 +86,7 @@ func TestDownloadWritesMuOSMetadata(t *testing.T) {
 // games are not offered at all.
 func TestDownloadOnlyOffersMappedPlatforms(t *testing.T) {
 	s := start(t, options{CFW: "MUOS", Server: romm(t), Platforms: []string{"gba"}})
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 
 	s.press("a", "a", "a")
 	s.awaitCardFile("ROMS/gba/Another Game (Europe).gba")

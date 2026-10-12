@@ -728,12 +728,18 @@ func downloadSaveFileName(romFileName, serverFileName, serverExt string, keepRom
 	return cfw.SaveBasename(keepRomExt, romFileName) + "." + serverExt
 }
 
-// downloadSaveName is the name a downloaded save is written under. A firmware
-// that says how its emulator names saves, like NextUI's Save format setting,
-// decides both the style and the extension. Elsewhere the style is read off the
-// saves already in saveDir and the server's extension is kept. extOverride, the
-// user's extension for the platform (Config.SaveExtensionFor), wins over both.
-func downloadSaveName(romFileName, serverFileName, serverExt, saveDir, extOverride string) string {
+// downloadSaveName is the name a downloaded save is written under. A platform
+// with a multi-part save suffix (Dreamcast VMUs, <rom>.A1.bin) gets that suffix
+// back, since RomM only reports the last extension. A firmware that says how its
+// emulator names saves, like NextUI's Save format setting, decides both the style
+// and the extension. Elsewhere, the style is read off the saves already in saveDir
+// and the server's extension is kept. extOverride, the user's extension for the
+// platform (Config.SaveExtensionFor), wins over both, but not over a platform suffix.
+func downloadSaveName(fsSlug, romFileName, serverFileName, serverExt, saveDir, extOverride string) string {
+	if suffix, ok := platformSaveSuffix(fsSlug, serverExt); ok {
+		// The suffix is the emulator's own naming (Flycast drops the ROM extension).
+		return downloadSaveFileName(romFileName, serverFileName, suffix, false)
+	}
 	if keep, ext, ok := cfw.ActiveFirmware().SaveNaming(); ok {
 		if extOverride != "" {
 			ext = extOverride
@@ -907,7 +913,7 @@ func ScanSaves(config *settings.Config) []LocalSave {
 					})
 				}
 			} else {
-				saves = append(saves, scanFileSaves(entries, saveDir, emuDir, rommFSSlug,
+				saves = append(saves, scanFileSaves(entries, saveDir, emuDir, fsSlug, rommFSSlug,
 					cm.GetRomByFSLookup, cfw.ActiveFirmware().PairsClockFiles())...)
 			}
 		}
@@ -920,7 +926,9 @@ func ScanSaves(config *settings.Config) []LocalSave {
 // scanFileSaves matches the save files in one folder to ROMs. lookup resolves a
 // save's name key to a ROM (cm.GetRomByFSLookup on the device). With pairClocks,
 // each matched save carries the folder's files that belong with it (Companions).
-func scanFileSaves(entries []os.DirEntry, saveDir, emuDir, fsSlug string,
+// cfwSlug is the device's platform key, which picks the platform save suffixes
+// (PlatformSaveSuffixes); fsSlug is the RomM platform the saves are matched in.
+func scanFileSaves(entries []os.DirEntry, saveDir, emuDir, cfwSlug, fsSlug string,
 	lookup func(fsSlug, key string) (romm.Rom, error), pairClocks bool) []LocalSave {
 	logger := gaba.GetLogger()
 
@@ -940,13 +948,12 @@ func scanFileSaves(entries []os.DirEntry, saveDir, emuDir, fsSlug string,
 			continue
 		}
 
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if !ValidSaveExtensions[ext] {
+		nameNoExt, _, isSave := splitSaveName(cfwSlug, entry.Name())
+		if !isSave {
 			continue
 		}
 
 		saveFileCount++
-		nameNoExt := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 
 		var rom romm.Rom
 		var matched bool
@@ -1665,13 +1672,25 @@ func derivedSavePath(item SyncItem, config *settings.Config, ext string) string 
 		return ""
 	}
 	override, _ := config.SaveExtensionFor(item.LocalSave.FSSlug)
-	fileName := downloadSaveName(item.LocalSave.RomFileName, item.RemoteSave.FileName, ext, saveDir, override)
+	fileName := downloadSaveName(cfwSlugFor(item.LocalSave.FSSlug, config),
+		item.LocalSave.RomFileName, item.RemoteSave.FileName, ext, saveDir, override)
 	return filepath.Join(saveDir, fileName)
 }
 
+// cfwSlugFor is the device's platform key for a RomM fs_slug, which picks the
+// platform save suffixes (PlatformSaveSuffixes).
+func cfwSlugFor(fsSlug string, config *settings.Config) string {
+	if config == nil {
+		return fsSlug
+	}
+	return config.ResolveFSSlug(fsSlug)
+}
+
 // downloadPrimaryPath is the save file a download is written to: the local
-// save's path, else one derived for the ROM with extension ext, which must be a
-// save extension. On error the path, when known, is still returned for logging.
+// save's path, else one derived for the ROM with extension ext, which must be
+// named like a save for the platform (a save extension, or a platform save
+// suffix such as Flycast's .A1.bin). On error the path, when known, is still
+// returned for logging.
 func downloadPrimaryPath(item SyncItem, config *settings.Config, ext string) (string, error) {
 	if item.LocalSave.FilePath != "" {
 		return item.LocalSave.FilePath, nil
@@ -1680,7 +1699,7 @@ func downloadPrimaryPath(item SyncItem, config *settings.Config, ext string) (st
 	if path == "" {
 		return "", errNoSavePath
 	}
-	if !hasSaveExtension(path) {
+	if _, _, isSave := splitSaveName(cfwSlugFor(item.LocalSave.FSSlug, config), filepath.Base(path)); !isSave {
 		return path, errNonSaveName
 	}
 	return path, nil

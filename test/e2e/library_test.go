@@ -15,7 +15,7 @@ func TestPairedDeviceReachesItsLibrary(t *testing.T) {
 	})
 
 	// Grout asks the server what it has before it can draw anything.
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 	s.screenshot("platform-list")
 }
 
@@ -28,7 +28,7 @@ func TestUnmappedPlatformsAreNotOffered(t *testing.T) {
 		Platforms: []string{"snes"},
 	})
 
-	s.awaitLog("Configuration Loaded!")
+	s.awaitLog("Starting Grout")
 	s.screenshot("only-snes-mapped")
 }
 
@@ -43,7 +43,7 @@ func TestEveryFirmwareReachesTheServer(t *testing.T) {
 				Platforms: []string{"snes", "gba"},
 			})
 
-			s.awaitLog("Configuration Loaded!")
+			s.awaitLog("Starting Grout")
 			s.screenshot("library")
 		})
 	}

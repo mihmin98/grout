@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"path/filepath"
 	"strings"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
@@ -47,11 +46,6 @@ func isZipPayload(data []byte) bool {
 		}
 	}
 	return false
-}
-
-// hasSaveExtension reports whether name ends in a save extension (any case).
-func hasSaveExtension(name string) bool {
-	return ValidSaveExtensions[strings.ToLower(filepath.Ext(name))]
 }
 
 // classifyZipEntries finds the save-data entry and the clock entry in a

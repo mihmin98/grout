@@ -932,6 +932,41 @@ func TestSaveDirKeepsRomExt(t *testing.T) {
 	if _, known := saveDirKeepsRomExt([]string{"notes.txt", ".nomedia"}); known {
 		t.Errorf("no save files: known=%v, want false", known)
 	}
+
+	// A Dreamcast VMU's ".A1" port tag must not read as a retained ROM extension,
+	// or the next download would be written as Game.chd.bin (issue #254).
+	if _, known := saveDirKeepsRomExt([]string{"Game (USA).A1.bin"}); known {
+		t.Errorf("vmu dir: known=%v, want false", known)
+	}
+}
+
+// Dreamcast VMUs are named <rom>.A1.bin by Flycast; only port A1 is synced and .bin is
+// a save only there, since it is also a ROM track extension (issue #254).
+func TestSplitSaveName(t *testing.T) {
+	cases := []struct {
+		name, fsSlug, file string
+		wantBase, wantSuf  string
+		wantOK             bool
+	}{
+		{"vmu port A1", "dc", "Game (USA).A1.bin", "Game (USA)", ".A1.bin", true},
+		{"vmu suffix case-insensitive", "dc", "Game (USA).a1.BIN", "Game (USA)", ".a1.BIN", true},
+		{"vmu port B1 ignored", "dc", "Game (USA).B1.bin", "", "", false},
+		{"plain bin is not a dc save", "dc", "Game (USA).bin", "", "", false},
+		{"bare suffix is not a save", "dc", ".A1.bin", "", "", false},
+		{"vmu suffix only on dc", "psx", "Game (USA).A1.bin", "", "", false},
+		{"generic extension on dc", "dc", "Game (USA).srm", "Game (USA)", ".srm", true},
+		{"generic extension", "snes", "Game (USA).sfc.sav", "Game (USA).sfc", ".sav", true},
+		{"not a save", "snes", "Game (USA).sfc", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base, suf, ok := splitSaveName(tc.fsSlug, tc.file)
+			if ok != tc.wantOK || base != tc.wantBase || suf != tc.wantSuf {
+				t.Errorf("splitSaveName(%q, %q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.fsSlug, tc.file, base, suf, ok, tc.wantBase, tc.wantSuf, tc.wantOK)
+			}
+		})
+	}
 }
 
 // saveLookupKeys turns a scanned save's no-extension name into the ROM expected-basename
@@ -1008,7 +1043,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 	t.Setenv("BASE_PATH", base)
 	t.Setenv(cfw.EnvVar, string(cfw.NextUI))
 
-	name := downloadSaveName("Game (USA).sfc", "Game (USA) [2026-01-01_00-00-00].srm", "srm", t.TempDir(), "")
+	name := downloadSaveName("snes", "Game (USA).sfc", "Game (USA) [2026-01-01_00-00-00].srm", "srm", t.TempDir(), "")
 	if name != "Game (USA).sfc.sav" {
 		t.Errorf("default format: %q, want Game (USA).sfc.sav", name)
 	}
@@ -1020,7 +1055,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "minuisettings.txt"), []byte("saveFormat=2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).sav" {
+	if name := downloadSaveName("snes", "Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).sav" {
 		t.Errorf("generic format: %q, want Game (USA).sav", name)
 	}
 }
@@ -1029,7 +1064,7 @@ func TestDownloadSaveName_FollowsNextUISaveFormat(t *testing.T) {
 // server's extension is kept.
 func TestDownloadSaveName_OtherFirmwaresUnchanged(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.Knulli))
-	if name := downloadSaveName("Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).srm" {
+	if name := downloadSaveName("snes", "Game (USA).sfc", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).srm" {
 		t.Errorf("knulli: %q, want Game (USA).srm", name)
 	}
 }
@@ -1038,7 +1073,7 @@ func TestDownloadSaveName_OtherFirmwaresUnchanged(t *testing.T) {
 // with no setting to change it.
 func TestDownloadSaveName_MinUIAlwaysSav(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.MinUI))
-	if name := downloadSaveName("Game (USA).gba", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).gba.sav" {
+	if name := downloadSaveName("gba", "Game (USA).gba", "x.srm", "srm", t.TempDir(), ""); name != "Game (USA).gba.sav" {
 		t.Errorf("minui: %q, want Game (USA).gba.sav", name)
 	}
 }
@@ -1065,7 +1100,7 @@ func scanFolder(t *testing.T, pairClocks bool, names ...string) (string, []Local
 		}
 		return romm.Rom{}, fmt.Errorf("no rom for %s", key)
 	}
-	return dir, scanFileSaves(entries, dir, dir, "gbc", lookup, pairClocks)
+	return dir, scanFileSaves(entries, dir, dir, "gbc", "gbc", lookup, pairClocks)
 }
 
 func TestScanFileSaves_PairsClockOnRocknix(t *testing.T) {
@@ -1101,6 +1136,35 @@ func TestScanFileSaves_UnchangedForSav(t *testing.T) {
 	s := saves[0]
 	if s.FilePath != filepath.Join(dir, "Crystal.sav") || s.FSSlug != "gbc" || s.EmulatorDir != dir || s.Companions != nil {
 		t.Errorf("save = %+v", s)
+	}
+}
+
+// Flycast's per-game VMUs: only the A1 card is a save, and only in the device's dc
+// folder, whatever the RomM platform it is matched in is called.
+func TestScanFileSaves_DreamcastVMU(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"Game.A1.bin", "Game.B1.bin", "Game.ldci", "Game.chd"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(fsSlug, key string) (romm.Rom, error) {
+		if fsSlug == "dreamcast" && key == "Game" {
+			return romm.Rom{ID: 3, Name: "Game"}, nil
+		}
+		return romm.Rom{}, fmt.Errorf("no rom for %s", key)
+	}
+
+	saves := scanFileSaves(entries, dir, dir, "dc", "dreamcast", lookup, false)
+	if len(saves) != 1 || saves[0].FileName != "Game.A1.bin" || saves[0].FSSlug != "dreamcast" {
+		t.Errorf("dc: saves = %+v, want only Game.A1.bin in dreamcast", saves)
+	}
+	if saves := scanFileSaves(entries, dir, dir, "psx", "dreamcast", lookup, false); len(saves) != 0 {
+		t.Errorf("psx: saves = %+v, want none", saves)
 	}
 }
 
@@ -1197,10 +1261,10 @@ func TestIsBackupOf(t *testing.T) {
 // override names a new download the way the emulator here expects.
 func TestDownloadSaveName_ExtOverride(t *testing.T) {
 	t.Setenv(cfw.EnvVar, string(cfw.ROCKNIX))
-	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", t.TempDir(), "sav"); got != "Game.sav" {
+	if got := downloadSaveName("nds", "Game.nds", "Game [2026].srm", "srm", t.TempDir(), "sav"); got != "Game.sav" {
 		t.Errorf("override: %q, want Game.sav", got)
 	}
-	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", t.TempDir(), ""); got != "Game.srm" {
+	if got := downloadSaveName("nds", "Game.nds", "Game [2026].srm", "srm", t.TempDir(), ""); got != "Game.srm" {
 		t.Errorf("no override: %q, want Game.srm", got)
 	}
 
@@ -1209,7 +1273,7 @@ func TestDownloadSaveName_ExtOverride(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Other.nds.sav"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := downloadSaveName("Game.nds", "Game [2026].srm", "srm", dir, "sav"); got != "Game.nds.sav" {
+	if got := downloadSaveName("nds", "Game.nds", "Game [2026].srm", "srm", dir, "sav"); got != "Game.nds.sav" {
 		t.Errorf("ROM-extension style: %q, want Game.nds.sav", got)
 	}
 }
@@ -1247,5 +1311,27 @@ func TestMapOperationsToItems_PrefersOverrideExtension(t *testing.T) {
 	items := mapOperationsToItems(ops[:1], []LocalSave{srm, sav}, nil, nil, &settings.Config{}, nil, nil)
 	if len(items) != 1 || items[0].LocalSave.FileName != "Game.srm" {
 		t.Errorf("no option: %+v, want the first scanned Game.srm", items)
+	}
+}
+
+// RomM only reports a VMU's last extension ("bin"), so a Dreamcast save is written back
+// as <rom>.A1.bin, the name Flycast loads, whatever it was called on the server and
+// whatever the firmware's own save naming is (issue #254).
+func TestDownloadSaveName_DreamcastVMU(t *testing.T) {
+	for _, fw := range []cfw.CFW{cfw.Knulli, cfw.Batocera, cfw.NextUI, cfw.MinUI} {
+		t.Run(string(fw), func(t *testing.T) {
+			t.Setenv("BASE_PATH", t.TempDir())
+			t.Setenv(cfw.EnvVar, string(fw))
+			for _, server := range []string{"Game (USA).A1 [2026-01-01_00-00-00].bin", "T-8111N.A1.bin"} {
+				if name := downloadSaveName("dc", "Game (USA).chd", server, "bin", t.TempDir(), ""); name != "Game (USA).A1.bin" {
+					t.Errorf("server %q: %q, want Game (USA).A1.bin", server, name)
+				}
+			}
+		})
+	}
+
+	t.Setenv(cfw.EnvVar, string(cfw.Knulli))
+	if name := downloadSaveName("psx", "Game (USA).chd", "x.bin", "bin", t.TempDir(), ""); name != "Game (USA).bin" {
+		t.Errorf("non-dc: %q, want Game (USA).bin", name)
 	}
 }

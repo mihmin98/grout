@@ -1,6 +1,11 @@
 package romm
 
-import "testing"
+import (
+	"encoding/json"
+	"grout/library"
+	"grout/settings"
+	"testing"
+)
 
 func TestCanonicalLocalBasename(t *testing.T) {
 	tests := []struct {
@@ -142,6 +147,62 @@ func TestLocalBasenames(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Fatalf("LocalBasenames() = %v, want %v", got, tt.want)
 				}
+			}
+		})
+	}
+}
+
+// The miximage v2 kind must decode its own ss_metadata fields and resolve them
+// like the other RomM-hosted art: path over URL, asset prefix added only when
+// missing, and the regular cover when RomM has no v2 artwork.
+func TestArtworkURLMixImageV2(t *testing.T) {
+	host := settings.Host{RootURI: "http://romm.local", Port: 8080}
+
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{
+			name: "relative path gets the asset prefix",
+			json: `{"ss_metadata":{"miximage_v2_path":"roms/1/miximage_v2.png"}}`,
+			want: "http://romm.local:8080/assets/romm/resources/roms/1/miximage_v2.png",
+		},
+		{
+			name: "path already under /assets is not prefixed twice",
+			json: `{"ss_metadata":{"miximage_v2_path":"/assets/romm/resources/roms/1/miximage_v2.png?ts=42"}}`,
+			want: "http://romm.local:8080/assets/romm/resources/roms/1/miximage_v2.png?ts=42",
+		},
+		{
+			name: "path wins over URL",
+			json: `{"ss_metadata":{"miximage_v2_path":"roms/1/miximage_v2.png","miximage_v2_url":"https://ss.example/v2.png"}}`,
+			want: "http://romm.local:8080/assets/romm/resources/roms/1/miximage_v2.png",
+		},
+		{
+			name: "URL only is used as is",
+			json: `{"ss_metadata":{"miximage_v2_url":"https://ss.example/v2 image.png"}}`,
+			want: "https://ss.example/v2%20image.png",
+		},
+		{
+			name: "v1 miximage is not used for v2",
+			json: `{"path_cover_small":"/assets/cover_small.png","ss_metadata":{"miximage_path":"roms/1/miximage.png","miximage_url":"https://ss.example/v1.png"}}`,
+			want: "http://romm.local:8080/assets/cover_small.png",
+		},
+		{
+			name: "no v2 artwork falls back to the URL cover",
+			json: `{"url_cover":"https://igdb.example/cover.png","ss_metadata":{}}`,
+			want: "https://igdb.example/cover.png",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var rom Rom
+			if err := json.Unmarshal([]byte(tt.json), &rom); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := rom.GetArtworkURL(library.ArtKindMixImageV2, host); got != tt.want {
+				t.Errorf("GetArtworkURL() = %q, want %q", got, tt.want)
 			}
 		})
 	}
