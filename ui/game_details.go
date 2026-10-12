@@ -55,7 +55,7 @@ func (s *GameDetailsScreen) Draw(input GameDetailsInput) (GameDetailsOutput, err
 	// Only files a player would launch are versions; RomM also files manuals
 	// and the like with a game.
 	versions := input.Game.PlayableFiles()
-	picksVersion := input.Game.HasNestedSingleFile && len(versions) > 1
+	picksVersion := offersVersionPicker(input.Game)
 
 	sections := s.sections(input, picksVersion)
 
@@ -147,6 +147,12 @@ func (s *GameDetailsScreen) followVersion(sections []gaba.Section, input GameDet
 	}
 }
 
+// offersVersionPicker reports whether the screen lets the player pick which of
+// a game's versions to download.
+func offersVersionPicker(g romm.Rom) bool {
+	return g.HasNestedSingleFile && len(g.PlayableFiles()) > 1
+}
+
 func selectedFileID(selections []gaba.DropdownSelection) int {
 	for _, selection := range selections {
 		if selection.ID == fileVersionDropdown {
@@ -224,6 +230,7 @@ var factRows = []struct {
 	{"game_details_game_modes", "Game Modes", func(g romm.Rom) string { return list(g.Metadatum.GameModes) }},
 	{"game_details_regions", "Regions", func(g romm.Rom) string { return list(g.Regions) }},
 	{"game_details_languages", "Languages", func(g romm.Rom) string { return list(g.Languages) }},
+	{"game_details_filename", "Filename", localFileName},
 	{"game_details_file_size", "File Size", func(g romm.Rom) string {
 		if g.FsSizeBytes <= 0 {
 			return ""
@@ -246,6 +253,21 @@ func gameFacts(game romm.Rom) []gaba.MetadataItem {
 		}
 	}
 	return facts
+}
+
+// localFileName is the name the game goes by on the card once downloaded: the
+// folder a multi-disc game unpacks into, or the file a single-file game is
+// written as. A game offering several versions has no one name until a version
+// is picked, and the picker already shows each one.
+func localFileName(g romm.Rom) string {
+	switch {
+	case g.HasMultipleFiles:
+		return g.FsNameNoExt
+	case offersVersionPicker(g), len(g.Files) == 0:
+		return ""
+	default:
+		return g.PlayableFiles()[0].FileName
+	}
 }
 
 func list(values []string) string { return strings.Join(values, ", ") }

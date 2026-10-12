@@ -313,7 +313,8 @@ You'll see:
 - **File Version dropdown** - If the game has multiple file versions (like different regions or revisions), use this
   dropdown to select which version to download. Already-downloaded versions are marked with a download icon.
 - **Summary** - A description of the game
-- **Metadata** - Release date, genres, developers/publishers, game modes, regions, languages, and file size
+- **Metadata** - Release date, genres, developers/publishers, game modes, regions, languages,
+  filename (the name it is saved under on the device) and file size
 - **Multi-file indicator** - If the game has multiple files (like multi-disc PlayStation games)
 
 From here:
