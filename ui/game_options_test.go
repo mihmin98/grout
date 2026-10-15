@@ -20,7 +20,8 @@ func clickedValues(items []gaba.ItemWithOptions) []string {
 }
 
 // Delete from Device is offered only for a game with files on the device, and
-// comes after Show QR Code.
+// comes after Show QR Code. Extract Archive sits between them, only when the
+// game's archive is on the card.
 func TestGameOptionsMenu_DeleteOnlyWithLocalCopy(t *testing.T) {
 	s := NewGameOptionsScreen()
 	config := &settings.Config{}
@@ -30,17 +31,19 @@ func TestGameOptionsMenu_DeleteOnlyWithLocalCopy(t *testing.T) {
 		name             string
 		deviceRegistered bool
 		hasLocalCopy     bool
+		hasArchive       bool
 		wantRows         int
 		wantClicks       []string
 	}{
-		{"not downloaded", false, false, 1, []string{"show_qr"}},
-		{"downloaded", false, true, 2, []string{"show_qr", "delete"}},
-		{"downloaded, save sync", true, true, 3, []string{"show_qr", "delete"}},
-		{"not downloaded, save sync", true, false, 2, []string{"show_qr"}},
+		{"not downloaded", false, false, false, 1, []string{"show_qr"}},
+		{"downloaded", false, true, false, 2, []string{"show_qr", "delete"}},
+		{"downloaded, save sync", true, true, false, 3, []string{"show_qr", "delete"}},
+		{"not downloaded, save sync", true, false, false, 2, []string{"show_qr"}},
+		{"archive on the card", false, true, true, 3, []string{"show_qr", "extract", "delete"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			items := s.buildMenuItems(config, game, tt.deviceRegistered, nil, tt.hasLocalCopy)
+			items := s.buildMenuItems(config, game, tt.deviceRegistered, nil, tt.hasLocalCopy, tt.hasArchive)
 
 			if len(items) != tt.wantRows {
 				t.Fatalf("rows = %d, want %d", len(items), tt.wantRows)

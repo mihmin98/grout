@@ -40,6 +40,9 @@ const (
 	GameOptionsActionBack
 	GameOptionsActionSyncNow
 	GameOptionsActionDelete
+	// GameOptionsActionExtracted closes the panel after unpacking the game's
+	// archive, like Back, so Game Details shows the new download state.
+	GameOptionsActionExtracted
 )
 
 type DeleteGameAction int

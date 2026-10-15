@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -81,7 +82,11 @@ func (s *DownloadScreen) draw(input DownloadInput) (DownloadOutput, error) {
 			"fs_name", skip.Game.FsName, "reason", skip.Reason)
 	}
 
-	arrived, err := s.fetchRoms(plan, input)
+	// Grout's own Download Complete screen asks about unpacking, so the
+	// widget's would only be a second press.
+	offer := offersExtraction(input, plan)
+
+	arrived, err := s.fetchRoms(plan, input, offer)
 	if err != nil {
 		return output, err
 	}
@@ -92,7 +97,25 @@ func (s *DownloadScreen) draw(input DownloadInput) (DownloadOutput, error) {
 		return output, nil
 	}
 
-	written := s.unpack(input, plan, downloaded)
+	archives := arrivedArchives(input, plan, downloaded)
+	// A fresh archive replaces what an earlier one was unpacked to. Its entry
+	// is pointed at whatever the game launches from once unpacking is settled.
+	replaced := make(map[int][]string, len(archives))
+	for _, game := range downloaded {
+		if location, ok := archives[game.ID]; ok {
+			replaced[game.ID] = catalog.ReplaceExtraction(input.Config, game, location)
+		}
+	}
+
+	extract := make(map[int]bool, len(archives))
+	if offer && askToExtract(downloaded, archives) {
+		for id := range archives {
+			extract[id] = true
+		}
+	}
+
+	written := s.unpack(input, plan, downloaded, archives, extract)
+	repointEntries(downloaded, archives, replaced, written)
 
 	if len(plan.Art) > 0 {
 		s.fetchArt(plan.Art, downloaded, input.Host)
@@ -109,7 +132,7 @@ func (s *DownloadScreen) draw(input DownloadInput) (DownloadOutput, error) {
 //
 // A partial file left by a failure is deleted: the frontend would list it as a
 // game, and grout would count it as already downloaded.
-func (s *DownloadScreen) fetchRoms(plan download.Plan, input DownloadInput) (map[string]bool, error) {
+func (s *DownloadScreen) fetchRoms(plan download.Plan, input DownloadInput, skipCompleteScreen bool) (map[string]bool, error) {
 	logger := gaba.GetLogger()
 
 	downloads := romDownloads(plan, input.Config.DownloadTimeout.Duration())
@@ -120,7 +143,7 @@ func (s *DownloadScreen) fetchRoms(plan download.Plan, input DownloadInput) (map
 	result, err := gaba.DownloadManager(downloads, map[string]string{
 		"Authorization": input.Host.AuthHeader(),
 	}, gaba.DownloadManagerOptions{
-		AutoContinueOnComplete: input.Config.DownloadArt,
+		AutoContinueOnComplete: input.Config.DownloadArt || skipCompleteScreen,
 		SkipSSLVerification:    input.Host.InsecureSkipVerify,
 	})
 	if err != nil {
@@ -160,15 +183,73 @@ func gamesThatArrived(selected []romm.Rom, arrived map[string]bool) []romm.Rom {
 	return games
 }
 
+// offersExtraction reports whether this run will ask about unpacking: the
+// user keeps archives, the firmware has a 7za, and some game in the plan is an
+// archive that may be unpacked.
+func offersExtraction(input DownloadInput, plan download.Plan) bool {
+	if input.Config.UnzipDownloads || !catalog.CanExtractWith7za() {
+		return false
+	}
+	for _, game := range input.SelectedGames {
+		if location := plan.RomLocation(game.Name); location != "" &&
+			catalog.ExtractableArchive(game, platformOf(input.Platform, game).FSSlug, location) {
+			return true
+		}
+	}
+	return false
+}
+
+// arrivedArchives is where each downloaded game that is an unpackable archive
+// landed, by ROM ID.
+func arrivedArchives(input DownloadInput, plan download.Plan, downloaded []romm.Rom) map[int]string {
+	archives := make(map[int]string)
+	for _, game := range downloaded {
+		location := plan.RomLocation(game.Name)
+		if location != "" && catalog.ExtractableArchive(game, platformOf(input.Platform, game).FSSlug, location) {
+			archives[game.ID] = location
+		}
+	}
+	return archives
+}
+
+// askToExtract is the Download Complete screen when archives arrived: B goes
+// back with the archives kept, A unpacks them all.
+func askToExtract(downloaded []romm.Rom, archives map[int]string) bool {
+	if len(archives) == 0 {
+		return false
+	}
+
+	var message string
+	if len(archives) == 1 {
+		for _, game := range downloaded {
+			if _, ok := archives[game.ID]; ok {
+				message = localizeWith("download_extract_prompt_one",
+					"Download complete.\n{{.Name}} is an archive. Extract it?",
+					map[string]any{"Name": game.Name})
+			}
+		}
+	} else {
+		message = localizeWith("download_extract_prompt_many",
+			"Download complete.\n{{.Count}} games are archives. Extract them?",
+			map[string]any{"Count": len(archives)})
+	}
+
+	_, err := gaba.ConfirmationMessage(message, []gaba.FooterHelpItem{
+		FooterBack(),
+		{ButtonName: "A", HelpText: localize("button_extract", "Extract")},
+	}, gaba.MessageOptions{})
+	return err == nil
+}
+
 // unpack expands whatever arrived as an archive and points the metadata entry
 // at the file that came out. It returns the rom files each game left on the
 // card, by ROM ID, for the record of what the download wrote.
 //
 // A game that fails to unpack keeps its archive and is left out of the
 // metadata rather than failing the run, so the rest of the batch still lands.
-func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloaded []romm.Rom) map[int][]string {
+func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloaded []romm.Rom, archives map[int]string, extract map[int]bool) map[int]download.Unpacked {
 	logger := gaba.GetLogger()
-	written := make(map[int][]string, len(downloaded))
+	written := make(map[int]download.Unpacked, len(downloaded))
 
 	for _, game := range downloaded {
 		// Where the rom actually landed. A game shipping several versions is
@@ -178,11 +259,12 @@ func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloa
 		if location == "" {
 			continue
 		}
+		_, isArchive := archives[game.ID]
 
 		switch {
 		case game.HasMultipleFiles:
 			romDirectory := cfw.PlatformRomDirectory(input.Config, platformOf(input.Platform, game).FSSlug)
-			unpacked, err := s.extracting(game.Name, func(progress *atomic.Float64) (download.Unpacked, error) {
+			unpacked, err := extractWithProgress(game.Name, func(_ context.Context, progress *atomic.Float64) (download.Unpacked, error) {
 				return download.ExtractMultiFile(game, romDirectory, progress)
 			})
 			if err != nil {
@@ -190,40 +272,47 @@ func (s *DownloadScreen) unpack(input DownloadInput, plan download.Plan, downloa
 				continue
 			}
 			plan.SetGamePath(game.EntryFileName(), unpacked.Path)
-			written[game.ID] = unpacked.Written
+			written[game.ID] = unpacked
 
-		case input.Config.UnzipDownloads && download.IsArchive(location):
-			unpacked, err := s.extracting(game.Name, func(progress *atomic.Float64) (download.Unpacked, error) {
-				return download.ExtractArchive(location, filepath.Dir(location), progress)
+		case isArchive && (input.Config.UnzipDownloads || extract[game.ID]):
+			unpacked, err := extractWithProgress(game.Name, func(ctx context.Context, progress *atomic.Float64) (download.Unpacked, error) {
+				return catalog.UnpackDownloaded(ctx, game, location, progress)
 			})
 			if err != nil {
 				logger.Warn("Failed to unpack ROM, keeping the archive", "game", game.Name, "error", err)
-				written[game.ID] = []string{location}
+				if !isCancelled(err) {
+					showExtractFailure(game.Name, err)
+				}
+				written[game.ID] = download.Unpacked{Path: location, Written: []string{location}}
 				continue
 			}
-			plan.SetGamePath(game.EntryFileName(), unpacked.Path)
-			written[game.ID] = unpacked.Written
+			plan.SetUnpackedGamePath(game.EntryFileName(), unpacked.Path)
+			written[game.ID] = unpacked
 
 		default:
-			written[game.ID] = []string{location}
+			written[game.ID] = download.Unpacked{Path: location, Written: []string{location}}
 		}
 	}
 	return written
 }
 
-// extracting runs one unpack behind a progress dialog.
-func (s *DownloadScreen) extracting(gameName string, unpack func(*atomic.Float64) (download.Unpacked, error)) (download.Unpacked, error) {
-	progress := &atomic.Float64{}
-
-	return gaba.ProcessMessage(
-		localizeWith("download_extracting", "Extracting {{.Name}}...", map[string]any{"Name": gameName}),
-		gaba.ProcessMessageOptions{
-			ShowThemeBackground: true,
-			ShowProgressBar:     true,
-			Progress:            progress,
-		},
-		func() (download.Unpacked, error) { return unpack(progress) },
-	)
+// repointEntries points each archive game's existing gamelist entry at the
+// file it launches from now: the unpacked file, or the archive again when an
+// earlier unpacked copy was replaced by it and kept. Done before the metadata
+// is written, which then updates that entry instead of adding another.
+func repointEntries(downloaded []romm.Rom, archives map[int]string, replaced map[int][]string, written map[int]download.Unpacked) {
+	for _, game := range downloaded {
+		location, ok := archives[game.ID]
+		if !ok {
+			continue
+		}
+		final := written[game.ID].Path
+		from := replaced[game.ID]
+		if final != location {
+			from = append(from, location)
+		}
+		catalog.RepointEntries(filepath.Dir(location), from, final)
+	}
 }
 
 func (s *DownloadScreen) fetchArt(items []download.Item, downloaded []romm.Rom, host settings.Host) {

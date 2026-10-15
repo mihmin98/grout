@@ -22,9 +22,9 @@ func TestRecords(t *testing.T) {
 		}
 	}
 
-	written := map[int][]string{
-		9: {"/roms/gba/Second.gba"},
-		7: {"/roms/psx/Game/Game (Disc 1).chd", "/roms/psx/Game/Game.m3u"},
+	written := map[int]Unpacked{
+		9: {Written: []string{"/roms/gba/Second.gba"}, Source: "/roms/gba/Second.zip"},
+		7: {Written: []string{"/roms/psx/Game/Game (Disc 1).chd", "/roms/psx/Game/Game.m3u"}},
 	}
 	art := []Item{
 		{RomID: 7, Location: cover},
@@ -43,7 +43,7 @@ func TestRecords(t *testing.T) {
 	want := []Record{
 		{RomID: 7, Kind: RecordROM, Path: "/roms/psx/Game/Game (Disc 1).chd"},
 		{RomID: 7, Kind: RecordROM, Path: "/roms/psx/Game/Game.m3u"},
-		{RomID: 9, Kind: RecordROM, Path: "/roms/gba/Second.gba"},
+		{RomID: 9, Kind: RecordROM, Path: "/roms/gba/Second.gba", Detail: "/roms/gba/Second.zip"},
 		{RomID: 7, Kind: RecordArt, Path: cover},
 		{RomID: 7, Kind: RecordEntry, Path: "/roms/psx/gamelist.xml", Detail: "/roms/psx/Game/Game.m3u"},
 		{RomID: 9, Kind: RecordMeta, Path: "/info/catalogue/GBA/text/Second.txt"},

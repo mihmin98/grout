@@ -140,6 +140,35 @@ func RemoveGamesMetadata(locations []MetadataLocation) (int, error) {
 	return 0, nil
 }
 
+// RepointGameMetadata points the active firmware's gamelist entries for a
+// game at the file it launches from now, after unpacking moved it. from are
+// the paths the entries may name: the archive, or an earlier unpacked copy.
+// It returns the gamelist it changed, or "" when it changed none.
+//
+// Only gamelists keep the path; muOS names its texts after the game, which
+// unpacking does not change.
+func RepointGameMetadata(romDirectory string, from []string, to string) (string, error) {
+	var name gamelist.FileName
+	switch ActiveFirmware().Gamelist() {
+	case GamelistEmulationStation:
+		name = gamelist.GameListFileName
+	case GamelistMiyoo:
+		name = gamelist.MiyooGameListFileName
+	default:
+		return "", nil
+	}
+
+	listFile := filepath.Join(romDirectory, string(name))
+	changed, err := gamelist.RepointRomEntries(listFile, from, to)
+	if err != nil || changed == 0 {
+		return "", err
+	}
+	if name == gamelist.GameListFileName {
+		scheduleESRestart()
+	}
+	return listFile, nil
+}
+
 // removeGamelistEntries removes the entries of locations that name a gamelist,
 // editing each file once.
 func removeGamelistEntries(locations []MetadataLocation, name gamelist.FileName) (int, error) {

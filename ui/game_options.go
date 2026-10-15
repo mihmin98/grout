@@ -1,13 +1,17 @@
 package ui
 
 import (
+	"context"
 	"errors"
+
 	"grout/catalog"
+	"grout/download"
 	"grout/romm"
 	"grout/saves"
 	"grout/settings"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
+	"go.uber.org/atomic"
 )
 
 type GameOptionsInput struct {
@@ -62,7 +66,12 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 	oldSlotPref := config.GetSlotPreference(input.Game.ID)
 
 	hasLocalCopy := catalog.HasLocalCopy(*config, input.Game)
-	items := s.buildMenuItems(config, input.Game, input.Host.DeviceID != "", slotNames, hasLocalCopy)
+	var archivePath string
+	var hasArchive bool
+	if catalog.CanExtractWith7za() {
+		archivePath, hasArchive = catalog.LocalArchive(*config, input.Game)
+	}
+	items := s.buildMenuItems(config, input.Game, input.Host.DeviceID != "", slotNames, hasLocalCopy, hasArchive)
 
 	title := localize("game_options_title", "Game Options")
 
@@ -93,6 +102,9 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 				return output, nil
 			case "delete":
 				output.Action = GameOptionsActionDelete
+				return output, nil
+			case "extract":
+				output.Action = s.extract(input.Game, archivePath)
 				return output, nil
 			}
 		}
@@ -125,9 +137,10 @@ func (s *GameOptionsScreen) Draw(input GameOptionsInput) (GameOptionsOutput, err
 	return output, nil
 }
 
-// buildMenuItems lists the panel's rows. Delete from Device is offered only
-// when the game has files on the device to remove.
-func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Rom, deviceRegistered bool, slotNames []string, hasLocalCopy bool) []gaba.ItemWithOptions {
+// buildMenuItems lists the panel's rows. Extract Archive is offered only when
+// the game's archive is on the card and there is a 7za to unpack it with, and
+// Delete from Device only when the game has files on the device to remove.
+func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Rom, deviceRegistered bool, slotNames []string, hasLocalCopy, hasArchive bool) []gaba.ItemWithOptions {
 	items := make([]gaba.ItemWithOptions, 0)
 
 	if deviceRegistered {
@@ -142,11 +155,30 @@ func (s *GameOptionsScreen) buildMenuItems(config *settings.Config, game romm.Ro
 	}
 
 	items = append(items, clickableItem(localize("game_options_show_qr", "Show QR Code"), "show_qr"))
+	if hasArchive {
+		items = append(items, clickableItem(localize("game_options_extract", "Extract Archive"), "extract"))
+	}
 	if hasLocalCopy {
 		items = append(items, clickableItem(localize("game_options_delete", "Delete from Device"), "delete"))
 	}
 
 	return items
+}
+
+// extract unpacks the game's archive where it lies. Either way the panel then
+// closes back to Game Details, which works out its download label afresh.
+func (s *GameOptionsScreen) extract(game romm.Rom, archivePath string) GameOptionsAction {
+	_, err := extractWithProgress(game.Name, func(ctx context.Context, progress *atomic.Float64) (download.Unpacked, error) {
+		return catalog.ExtractLocalArchive(ctx, game, archivePath, progress)
+	})
+	if err != nil {
+		gaba.GetLogger().Warn("Failed to unpack ROM, keeping the archive", "game", game.Name, "error", err)
+		if !isCancelled(err) {
+			showExtractFailure(game.Name, err)
+		}
+		return GameOptionsActionBack
+	}
+	return GameOptionsActionExtracted
 }
 
 func clickableItem(text, value string) gaba.ItemWithOptions {

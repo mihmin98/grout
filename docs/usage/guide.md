@@ -344,6 +344,9 @@ patches and DLC, sorted by the folder they sit in, and those are not offered as 
   registered). You can select an existing slot or create a new one with **New Slot...**. Changing the slot triggers
   a sync automatically. See [Save Slots](save-sync.md#save-slots) for details.
 - **Show QR Code** - Display a QR code that links to this game's page on your RomM web interface.
+- **Extract Archive** - Extract the game's downloaded `.zip` or `.7z` into its ROM folder and delete the archive.
+  Appears only when the firmware has `7za` and the game's archive is on the device. See
+  [Extracting archives](#extracting-archives).
 - **Delete from Device** - Remove a downloaded game from this device. Appears only when the game has files on the
   device. Press `X` to confirm or `B` to cancel. Grout removes the game's ROM files (every downloaded version, and a
   multi-disc game's discs and playlist), the artwork it downloaded and the game's entry in the firmware's game list.
@@ -376,13 +379,41 @@ appropriate directory on your device. Press `Y` to cancel the download, or `X` t
 3. **Artwork is downloaded** - If "Download Art" is enabled in Settings, Grout downloads box art for each game to your
    artwork directory after the ROMs finish. This artwork is only displayed within Grout - it does not affect artwork shown in your CFW's game list.
 
-4. **Archived files are extracted automatically** - If "Archived Downloads" is set to "Uncompress" in Settings, Grout
-   will extract zip and 7z files to the configured ROM directory and then delete the archive.
+4. **Archived files are extracted** - If "Archived Downloads" is set to "Uncompress" in Settings, Grout
+   will extract zip and 7z files to the configured ROM directory and then delete the archive. If it is set to
+   "Do Nothing" and the firmware has `7za`, the **Download Complete** screen asks instead: `A` extracts the archive
+   (every archive, when several games were downloaded) and `B` goes back with the archives kept.
 
 If a download fails, Grout will show you which games had problems and clean up any leftover cruft.
 
 When everything's done, you're dropped back to the game list. The games you just downloaded are now on your device and
 ready to play.
+
+### Extracting archives
+
+Some emulators can't load a game from a `.zip` or `.7z`, and loading from an archive is slower. Grout can extract a
+single-file game's archive into the folder it was downloaded to, and delete the archive afterwards:
+
+- with **Archived Downloads** set to **Uncompress**, automatically after every download;
+- with it set to **Do Nothing**, from the **Download Complete** screen or later from **Game Options** → **Extract
+  Archive**. Both need a `7za` on the firmware's `PATH`.
+
+A progress bar shows how far the extraction is; `B` cancels it and keeps the archive. The files keep the names they
+have inside the archive, and the game's entry in the firmware's game list is updated to point at the extracted game,
+keeping its favorite and play count.
+
+Grout checks before it starts, and keeps the archive untouched if:
+
+- the card doesn't have room for the extracted files;
+- the archive was packed with settings that need more memory than the device has free (very large 7z dictionaries, on
+  devices with 1 GB of RAM);
+- a file in the archive would overwrite a file that isn't this game's own, or any save.
+
+**Redownloading** an extracted game deletes the extracted files once the fresh archive has arrived (saves and save
+states are kept), so the archive replaces them, and you're offered to extract it again.
+
+Games on platforms that play from the archive itself (Arcade, Neo Geo, CPS, Naomi, Atomiswave and DOS) are never
+extracted.
 
 
 ## BIOS Files

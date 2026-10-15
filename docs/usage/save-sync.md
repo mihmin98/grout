@@ -265,6 +265,13 @@ saves:
 - Disable autoload for save states
 - Delete the save state after downloading a synced save
 
+### Extracted archives
+
+Saves are matched to a game by file name. A game extracted from its archive keeps the name the file has inside the
+archive, which is almost always the archive's own name (`Crystal.zip` holding `Crystal.gbc`). If the names differ
+(`Crystal.zip` holding `pokecrystal.gbc`), the emulator names the save after the extracted file, and Save Sync can't
+tell which RomM game it belongs to. Redownloading and keeping the archive fixes it.
+
 ### Deleted games
 
 **Delete from Device** in Game Options keeps a game's saves. They keep uploading as before, but the game's saves on

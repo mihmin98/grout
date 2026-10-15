@@ -2,6 +2,8 @@ package download
 
 import (
 	"archive/zip"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,7 @@ import (
 
 	"go.uber.org/atomic"
 
+	"grout/archive"
 	"grout/cfw"
 	"grout/gamelist"
 	"grout/library"
@@ -60,25 +63,63 @@ func TestIsArchive(t *testing.T) {
 	}
 }
 
+// unpackers runs a test against the built-in readers and, where the machine
+// has one, the real 7za.
+func unpackers(t *testing.T, test func(t *testing.T, u unpacker)) {
+	t.Run("builtin", func(t *testing.T) { test(t, builtinUnpacker{}) })
+	t.Run("7za", func(t *testing.T) {
+		bin, ok := archive.SevenZipPath()
+		if !ok {
+			t.Skip("7za is not installed")
+		}
+		test(t, sevenZipCLI{bin: bin})
+	})
+}
+
+func extract(t *testing.T, u unpacker, archivePath string, mayReplace func(string) bool) (Unpacked, error) {
+	t.Helper()
+	return extractArchive(context.Background(), u, archivePath, mayReplace, &atomic.Float64{})
+}
+
 func TestExtractArchive(t *testing.T) {
-	dir := t.TempDir()
-	archivePath := filepath.Join(dir, "Game.zip")
-	zipOf(t, archivePath, "Game.sfc")
+	unpackers(t, func(t *testing.T, u unpacker) {
+		dir := t.TempDir()
+		archivePath := filepath.Join(dir, "Game.zip")
+		zipOf(t, archivePath, "Game.sfc")
 
-	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+		unpacked, err := extract(t, u, archivePath, nil)
+		if err != nil {
+			t.Fatalf("ExtractArchive: %v", err)
+		}
+
+		if want := filepath.Join(dir, "Game.sfc"); unpacked.Path != want {
+			t.Errorf("path = %q, want %q", unpacked.Path, want)
+		}
+		if unpacked.Source != archivePath {
+			t.Errorf("source = %q, want the archive", unpacked.Source)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "Game.sfc")); err != nil {
+			t.Errorf("the rom was not unpacked: %v", err)
+		}
+		// Leaving it behind would show the game twice and waste space on the card.
+		if _, err := os.Stat(archivePath); !os.IsNotExist(err) {
+			t.Error("the archive must be removed once it is unpacked")
+		}
+		assertNoStaging(t, dir)
+	})
+}
+
+// The staging folder is hidden, but a leftover one still wastes the card.
+func assertNoStaging(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("ExtractArchive: %v", err)
+		t.Fatal(err)
 	}
-
-	if want := filepath.Join(dir, "Game.sfc"); unpacked.Path != want {
-		t.Errorf("path = %q, want %q", unpacked.Path, want)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "Game.sfc")); err != nil {
-		t.Errorf("the rom was not unpacked: %v", err)
-	}
-	// Leaving it behind would show the game twice and waste space on the card.
-	if _, err := os.Stat(archivePath); !os.IsNotExist(err) {
-		t.Error("the archive must be removed once it is unpacked")
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), stagingPrefix) {
+			t.Errorf("staging folder %s was left behind", e.Name())
+		}
 	}
 }
 
@@ -89,7 +130,7 @@ func TestExtractArchive_PrefersThePlaylist(t *testing.T) {
 	archivePath := filepath.Join(dir, "FF7.zip")
 	zipOf(t, archivePath, "FF7 (Disc 1).chd", "FF7 (Disc 2).chd", "FF7.m3u")
 
-	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+	unpacked, err := extract(t, builtinUnpacker{}, archivePath, nil)
 	if err != nil {
 		t.Fatalf("ExtractArchive: %v", err)
 	}
@@ -99,20 +140,134 @@ func TestExtractArchive_PrefersThePlaylist(t *testing.T) {
 	}
 }
 
+// The tracks are not launchable on their own; the sheet naming them is.
+func TestPlayablePath_PrefersTheDiscSheet(t *testing.T) {
+	if got := playablePath([]string{"Game (Track 1).bin", "Game (Track 2).bin", "Game.cue"}); got != "Game.cue" {
+		t.Errorf("playablePath = %q, want the cue sheet", got)
+	}
+}
+
 // A broken archive is not worth losing the download to: the file stays put so
 // a frontend that can read archives still has something to launch.
 func TestExtractArchive_KeepsTheArchiveOnFailure(t *testing.T) {
+	unpackers(t, func(t *testing.T, u unpacker) {
+		dir := t.TempDir()
+		archivePath := filepath.Join(dir, "Broken.zip")
+		if err := os.WriteFile(archivePath, []byte("not a zip"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := extract(t, u, archivePath, nil); err == nil {
+			t.Fatal("expected an error unpacking a file that is not an archive")
+		}
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Error("the archive must survive a failed unpack")
+		}
+		assertNoStaging(t, dir)
+	})
+}
+
+// A file of another game, or a save, is never overwritten; nothing is moved
+// in at all, so the folder is as it was.
+func TestExtractArchive_RefusesToOverwrite(t *testing.T) {
+	unpackers(t, func(t *testing.T, u unpacker) {
+		dir := t.TempDir()
+		archivePath := filepath.Join(dir, "Game.zip")
+		zipOf(t, archivePath, "Game.gbc", "Game.srm")
+		existing := filepath.Join(dir, "Game.srm")
+		if err := os.WriteFile(existing, []byte("my save"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := extract(t, u, archivePath, func(string) bool { return false })
+		var conflict *ConflictError
+		if !errors.As(err, &conflict) || conflict.Path != existing {
+			t.Fatalf("err = %v, want a conflict on %s", err, existing)
+		}
+
+		if got, _ := os.ReadFile(existing); string(got) != "my save" {
+			t.Errorf("the save was overwritten: %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "Game.gbc")); !os.IsNotExist(err) {
+			t.Error("nothing may be moved in when one file clashes")
+		}
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Error("the archive must survive a clash")
+		}
+		assertNoStaging(t, dir)
+	})
+}
+
+// The game's own earlier copy may be replaced.
+func TestExtractArchive_ReplacesWhatItMay(t *testing.T) {
 	dir := t.TempDir()
-	archivePath := filepath.Join(dir, "Broken.zip")
-	if err := os.WriteFile(archivePath, []byte("not a zip"), 0644); err != nil {
+	archivePath := filepath.Join(dir, "Game.zip")
+	zipOf(t, archivePath, "Game.gbc")
+	old := filepath.Join(dir, "Game.gbc")
+	if err := os.WriteFile(old, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := ExtractArchive(archivePath, dir, &atomic.Float64{}); err == nil {
-		t.Fatal("expected an error unpacking a file that is not an archive")
+	if _, err := extract(t, builtinUnpacker{}, archivePath, func(p string) bool { return p == old }); err != nil {
+		t.Fatalf("ExtractArchive: %v", err)
 	}
-	if _, err := os.Stat(archivePath); err != nil {
-		t.Error("the archive must survive a failed unpack")
+	if got, _ := os.ReadFile(old); string(got) != "rom" {
+		t.Errorf("Game.gbc = %q, want the unpacked one", got)
+	}
+}
+
+// An entry naming a path outside the folder would write anywhere on the card.
+func TestExtractArchive_RefusesEscapingPaths(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "Evil.zip")
+	zipOf(t, archivePath, "../outside.gbc")
+
+	if _, err := extract(t, builtinUnpacker{}, archivePath, nil); err == nil {
+		t.Fatal("expected an archive escaping its folder to be refused")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "outside.gbc")); !os.IsNotExist(err) {
+		t.Error("a file was written outside the rom folder")
+	}
+}
+
+func TestCheckResources(t *testing.T) {
+	dir := t.TempDir()
+
+	var noSpace *NoSpaceError
+	if err := checkResources([]archive.Entry{{Name: "Huge.iso", Size: 1 << 62}}, dir); !errors.As(err, &noSpace) {
+		t.Errorf("err = %v, want NoSpaceError", err)
+	}
+
+	if _, ok := archive.AvailableMemory(); ok {
+		var noMemory *NoMemoryError
+		err := checkResources([]archive.Entry{{Name: "Game.iso", Size: 1, Method: "LZMA2:4000g"}}, dir)
+		if !errors.As(err, &noMemory) {
+			t.Errorf("err = %v, want NoMemoryError", err)
+		}
+	}
+
+	if err := checkResources([]archive.Entry{{Name: "Game.gbc", Size: 1, Method: "LZMA2:16m"}}, dir); err != nil {
+		t.Errorf("a small archive was refused: %v", err)
+	}
+}
+
+func TestKeepsArchive(t *testing.T) {
+	tests := []struct {
+		slug, dir string
+		want      bool
+	}{
+		{"arcade", "/roms/arcade", true},
+		{"neogeoaes", "/roms/neogeo", true},
+		{"dos", "/roms/pc", true},
+		{"cps2", "", true},
+		{"gba", "/roms/gba", false},
+		{"gb", "/roms/MAME", true}, // a folder mapped by hand still counts
+		{"psx", "", false},
+	}
+	for _, tt := range tests {
+		if got := KeepsArchive(tt.slug, tt.dir); got != tt.want {
+			t.Errorf("KeepsArchive(%q, %q) = %v, want %v", tt.slug, tt.dir, got, tt.want)
+		}
 	}
 }
 
@@ -233,7 +388,7 @@ func TestExtractArchive_ReportsWhatItWrote(t *testing.T) {
 	archivePath := filepath.Join(dir, "Game.zip")
 	zipOf(t, archivePath, "Game.cue", "Game (Track 1).bin")
 
-	unpacked, err := ExtractArchive(archivePath, dir, &atomic.Float64{})
+	unpacked, err := extract(t, builtinUnpacker{}, archivePath, nil)
 	if err != nil {
 		t.Fatalf("ExtractArchive: %v", err)
 	}

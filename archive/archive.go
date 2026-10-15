@@ -174,6 +174,46 @@ func SevenZipFileNames(archivePath string) ([]string, error) {
 	return names, nil
 }
 
+// ListZip lists a zip's entries with their sizes.
+func ListZip(zipPath string) ([]Entry, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open zip file: %w", err)
+	}
+	defer reader.Close()
+
+	entries := make([]Entry, 0, len(reader.File))
+	for _, file := range reader.File {
+		entries = append(entries, Entry{
+			Name:      file.Name,
+			Size:      file.UncompressedSize64,
+			IsDir:     file.FileInfo().IsDir(),
+			Encrypted: file.Flags&0x1 != 0,
+		})
+	}
+	return entries, nil
+}
+
+// List7z lists a 7z's entries with their sizes. The reader does not say how
+// each is compressed, so Method is left empty.
+func List7z(archivePath string) ([]Entry, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open 7z file: %w", err)
+	}
+	defer reader.Close()
+
+	entries := make([]Entry, 0, len(reader.File))
+	for _, file := range reader.File {
+		entries = append(entries, Entry{
+			Name:  file.Name,
+			Size:  file.UncompressedSize,
+			IsDir: file.FileInfo().IsDir(),
+		})
+	}
+	return entries, nil
+}
+
 func extract7zFile(file *sevenzip.File, destPath string, buffer []byte, totalBytes uint64, extractedBytes *uint64, progress *atomic.Float64) error {
 	srcFile, err := file.Open()
 	if err != nil {

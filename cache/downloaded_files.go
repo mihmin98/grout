@@ -1,6 +1,7 @@
 package cache
 
-// Kinds of downloaded_files rows.
+// Kinds of downloaded_files rows. A ROM row unpacked from an archive beside it
+// carries that archive's path as its detail.
 const (
 	DownloadedROM   = "rom"   // a ROM file: the download itself, an unpacked entry, a disc or playlist
 	DownloadedArt   = "art"   // an art or media file
@@ -72,6 +73,40 @@ func (cm *Manager) GetDownloadedFiles(romID int) ([]DownloadedFile, error) {
 		WHERE rom_id = ?
 		ORDER BY kind, path, detail
 	`, romID)
+	if err != nil {
+		return nil, newCacheError("get", "downloaded_files", "", err)
+	}
+	defer rows.Close()
+
+	var files []DownloadedFile
+	for rows.Next() {
+		var f DownloadedFile
+		if err := rows.Scan(&f.RomID, &f.Kind, &f.Path, &f.Detail); err != nil {
+			return nil, newCacheError("get", "downloaded_files", "", err)
+		}
+		files = append(files, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, newCacheError("get", "downloaded_files", "", err)
+	}
+	return files, nil
+}
+
+// GetDownloadedROMs returns every ROM row of the record, for every ROM, ordered by ROM
+// and path, so a list of games can be checked against it with one query.
+func (cm *Manager) GetDownloadedROMs() ([]DownloadedFile, error) {
+	if cm == nil || !cm.initialized {
+		return nil, ErrNotInitialized
+	}
+
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	rows, err := cm.db.Query(`
+		SELECT rom_id, kind, path, detail FROM downloaded_files
+		WHERE kind = ?
+		ORDER BY rom_id, path, detail
+	`, DownloadedROM)
 	if err != nil {
 		return nil, newCacheError("get", "downloaded_files", "", err)
 	}

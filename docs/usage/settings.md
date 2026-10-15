@@ -103,7 +103,13 @@ _EmulationStation-based firmwares only._ Whether the name written to the gamelis
 Controls what happens when downloading archived ROM files (zip and 7z):
 
 - **Uncompress** - Grout automatically extracts archived ROMs after downloading. The archive is deleted after extraction.
-- **Do Nothing** - Keep the downloaded archive as-is without extracting.
+  When the firmware has `7za`, Grout extracts with it, which is faster on handhelds; otherwise it uses its own
+  extractor.
+- **Do Nothing** - Keep the downloaded archive as-is. When the firmware has `7za`, the **Download Complete** screen
+  offers to extract it anyway (`A` Extract, `B` Back), and **Game Options** offers **Extract Archive** later.
+
+Archives on platforms that play from the archive itself (Arcade, Neo Geo, CPS, Naomi, Atomiswave and DOS) are never
+extracted, whichever option is set. See [Extracting archives](guide.md#extracting-archives) for the details.
 
 ### Language
 

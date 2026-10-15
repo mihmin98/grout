@@ -178,6 +178,20 @@ func (p Plan) SetGamePath(fileName, path string) {
 	}
 }
 
+// SetUnpackedGamePath points a game's metadata entry at the file its archive
+// was unpacked to and names the entry after that file. Entries are matched by
+// file name when the metadata is written, so this updates the entry already
+// naming the unpacked file rather than adding a second one.
+func (p Plan) SetUnpackedGamePath(fileName, path string) {
+	for i := range p.Entries {
+		if p.Entries[i].Game.FileName == fileName {
+			p.Entries[i].Game.Path = path
+			p.Entries[i].Game.FileName = filepath.Base(path)
+			return
+		}
+	}
+}
+
 // MetadataLocations says where the firmware keeps each planned game's
 // metadata. Call it after unpacking, once each entry points at the file that
 // came out, since a gamelist entry is found again by that path.

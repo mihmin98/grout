@@ -7,7 +7,8 @@ import (
 	"grout/files"
 )
 
-// Kinds of Record. The values are what the cache stores.
+// Kinds of Record. The values are what the cache stores. A rom unpacked from an
+// archive beside it carries that archive as its Detail.
 const (
 	RecordROM   = "rom"   // a rom file: the download itself, an unpacked entry, a disc or playlist
 	RecordArt   = "art"   // an art or media file
@@ -30,8 +31,10 @@ type Record struct {
 //
 // written maps each game that landed to the rom files it left on the card. Art
 // and metadata are recorded only for those games, and art only when its file
-// exists, since a failed fetch writes nothing.
-func Records(written map[int][]string, art []Item, entries []cfw.MetadataLocation) []Record {
+// exists, since a failed fetch writes nothing. Files unpacked from an archive
+// beside them carry that archive as their Detail, so downloading it again can
+// find and replace them.
+func Records(written map[int]Unpacked, art []Item, entries []cfw.MetadataLocation) []Record {
 	ids := make([]int, 0, len(written))
 	for id := range written {
 		ids = append(ids, id)
@@ -40,8 +43,8 @@ func Records(written map[int][]string, art []Item, entries []cfw.MetadataLocatio
 
 	var records []Record
 	for _, id := range ids {
-		for _, path := range written[id] {
-			records = append(records, Record{RomID: id, Kind: RecordROM, Path: path})
+		for _, path := range written[id].Written {
+			records = append(records, Record{RomID: id, Kind: RecordROM, Path: path, Detail: written[id].Source})
 		}
 	}
 

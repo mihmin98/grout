@@ -223,3 +223,27 @@ func TestMigrate_V15AddsDownloadedFiles(t *testing.T) {
 		t.Errorf("schema_version = %s, want %d", version, schemaVersion)
 	}
 }
+
+// One query answers for a whole list of games: every ROM row, and nothing else.
+func TestGetDownloadedROMs(t *testing.T) {
+	cm := newTestManager(t)
+
+	rows := []DownloadedFile{
+		{RomID: 8, Kind: DownloadedROM, Path: "/roms/gb/Other.gb"},
+		{RomID: 7, Kind: DownloadedROM, Path: "/roms/gb/Game.gbc", Detail: "/roms/gb/Game.zip"},
+		{RomID: 7, Kind: DownloadedEntry, Path: "/roms/gb/gamelist.xml", Detail: "/roms/gb/Game.gbc"},
+		{RomID: 7, Kind: DownloadedArt, Path: "/roms/gb/images/Game.png"},
+	}
+	if err := cm.RecordDownloadedFiles(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := cm.GetDownloadedROMs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DownloadedFile{rows[1], rows[0]}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetDownloadedROMs =\n%+v\nwant\n%+v", got, want)
+	}
+}

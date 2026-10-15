@@ -66,12 +66,17 @@ func Browse(request BrowseRequest) GameList {
 
 	list := GameList{Title: request.Platform.Name}
 
+	var record downloadRecord
+	if HidesDownloaded(request.Config, request.Filter) || request.Config.DownloadedGames == settings.DownloadedGamesModeMark {
+		record = allRecords()
+	}
+
 	if HidesDownloaded(request.Config, request.Filter) {
 		// Only a game that is entirely on the card is hidden. Hiding one whose
 		// later discs are still missing would leave no way to finish it.
 		before := len(games)
 		games = slices.DeleteFunc(games, func(game romm.Rom) bool {
-			return DownloadStateOf(request.Config, game) == FullyDownloaded
+			return downloadStateOf(request.Config, game, record) == FullyDownloaded
 		})
 		list.AllDownloaded = before > 0 && len(games) == 0
 	}
@@ -90,7 +95,7 @@ func Browse(request BrowseRequest) GameList {
 		games = FilterByName(games, request.Search)
 	}
 
-	list.Entries = entriesFor(request, games)
+	list.Entries = entriesFor(request, games, record)
 	return list
 }
 
@@ -147,7 +152,7 @@ func collectionTitle(collection romm.Collection, platform romm.Platform) string 
 	return fmt.Sprintf("%s - %s", collection.Name, platform.Name)
 }
 
-func entriesFor(request BrowseRequest, games []romm.Rom) []GameEntry {
+func entriesFor(request BrowseRequest, games []romm.Rom, record downloadRecord) []GameEntry {
 	// A collection with no platform picked mixes them, so each row says which
 	// one it came from.
 	unified := IsCollection(request.Collection) && request.Platform.ID == 0
@@ -166,7 +171,7 @@ func entriesFor(request BrowseRequest, games []romm.Rom) []GameEntry {
 			MultipleFiles: game.HasNestedSingleFile,
 		}
 		if marked {
-			entry.Downloaded = DownloadStateOf(request.Config, game)
+			entry.Downloaded = downloadStateOf(request.Config, game, record)
 		}
 		entries = append(entries, entry)
 	}

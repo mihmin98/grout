@@ -24,6 +24,12 @@ The fork's purpose is syncing saves both ways between Grout (on ROCKNIX) and the
   - `catalog/delete.go` removes exactly those files and keeps the saves.
   - `gamelist/remove.go` drops the gamelist entry.
   - The UI is `ui/delete_game.go`, reached from Game Options.
+- **Extract ROM archives with 7za.** Only when `7za` is on `PATH` (`archive/sevenzip_cli.go`).
+  - Prompt: with Archived Downloads set to "Do Nothing", `ui/download.go` shows Grout's own Download Complete screen (gabagool's is skipped via `AutoContinueOnComplete`). Game Options also offers **Extract Archive**. "Uncompress" uses 7za when present and falls back to the Go extractor otherwise.
+  - Extraction: `download.ExtractArchive` unpacks into a hidden `.grout-extract-*` staging dir beside the archive. Before anything moves into the ROM dir it checks free space, decoder memory (`archive.DecoderMemory` vs `MemAvailable`) and conflicts (saves and other games' files are never overwritten).
+  - Blocklist: `download.KeepsArchive` lists arcade-style platforms that are never extracted.
+  - Records: unpacked ROM rows carry the source archive in `downloaded_files.detail`. `catalog.ReplaceExtraction` uses it to delete the old extracted copy when the archive is redownloaded, and `catalog.IsDownloaded`/`DownloadStateOf` fall back to it, since unpacked files don't match RomM's file names.
+  - Gamelist: entries are re-pointed in place (`gamelist.RepointRomEntries`), so ES favorites and play counts survive.
 - **NDS save extension override.** `Config.SaveExtensionOverrides` (`settings/config.go`) sets the extension a downloaded save gets when the ROM has no local save yet.
 - User-facing behaviour is documented in `docs/usage/save-sync.md`, `docs/usage/settings.md` and `docs/usage/guide.md`. Update these when behaviour changes.
 

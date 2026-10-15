@@ -74,7 +74,9 @@ Can't find what you're looking for? [Open an issue](https://github.com/rommapp/g
 > **What does the "Archived Downloads" setting do?**
 >
 > When set to **Uncompress**, Grout will automatically extract downloaded `.zip` and `.7z` archives after downloading.
-> When set to **Do Nothing**, the archive is saved as-is.
+> When set to **Do Nothing**, the archive is saved as-is; if the firmware has `7za`, you're asked on the
+> **Download Complete** screen whether to extract it, and can do it later from **Game Options**. See
+> [Extracting archives](guide.md#extracting-archives).
 
 > [!NOTE]
 > **What's the difference between the downloaded game indicators?**
