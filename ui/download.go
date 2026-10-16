@@ -20,6 +20,7 @@ import (
 	"grout/settings"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
+	buttons "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool/constants"
 	"go.uber.org/atomic"
 )
 
@@ -213,7 +214,8 @@ func arrivedArchives(input DownloadInput, plan download.Plan, downloaded []romm.
 }
 
 // askToExtract is the Download Complete screen when archives arrived: B goes
-// back with the archives kept, A unpacks them all.
+// back with the archives kept, Y (the games list's Filters button) unpacks
+// them all.
 func askToExtract(downloaded []romm.Rom, archives map[int]string) bool {
 	if len(archives) == 0 {
 		return false
@@ -236,8 +238,10 @@ func askToExtract(downloaded []romm.Rom, archives map[int]string) bool {
 
 	_, err := gaba.ConfirmationMessage(message, []gaba.FooterHelpItem{
 		FooterBack(),
-		{ButtonName: "A", HelpText: localize("button_extract", "Extract")},
-	}, gaba.MessageOptions{})
+		{ButtonName: "Y", HelpText: localize("button_extract", "Extract")},
+	}, gaba.MessageOptions{
+		ConfirmButton: buttons.VirtualButtonY,
+	})
 	return err == nil
 }
 

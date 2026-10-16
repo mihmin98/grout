@@ -381,7 +381,7 @@ appropriate directory on your device. Press `Y` to cancel the download, or `X` t
 
 4. **Archived files are extracted** - If "Archived Downloads" is set to "Uncompress" in Settings, Grout
    will extract zip and 7z files to the configured ROM directory and then delete the archive. If it is set to
-   "Do Nothing" and the firmware has `7za`, the **Download Complete** screen asks instead: `A` extracts the archive
+   "Do Nothing" and the firmware has `7za`, the **Download Complete** screen asks instead: `Y` extracts the archive
    (every archive, when several games were downloaded) and `B` goes back with the archives kept.
 
 If a download fails, Grout will show you which games had problems and clean up any leftover cruft.
